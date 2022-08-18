@@ -1,0 +1,20 @@
+[package]
+name = "nutils-poly"
+version = "1.0.0"
+authors = ["Evalf <info@evalf.com>"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/evalf/nutils-poly/"
+description = "Low-level functions for evaluating and manipulating polynomials"
+keywords = ["polynomials"]
+categories = ["mathematics"]
+
+[features]
+bench = []
+poly_eval_loop = []
+
+[dependencies]
+num-traits = "0.2"
+
+[dev-dependencies]
+approx = "0.5"
