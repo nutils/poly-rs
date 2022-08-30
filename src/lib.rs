@@ -26,48 +26,192 @@
 //! # Examples
 //!
 //! The vector of coefficients for the polynomial `p(x) = x^2 - x + 2` is
-//! `[1, -2, 2]`.
+//! `[1, -1, 2]`.
 //!
 //! ```
-//! use nutils_poly::{Eval as _, PartialDeriv as _, PolySequence};
+//! use nutils_poly::{Poly, PolySequence, Variable};
 //!
-//! let p = PolySequence::new([1, -1, 2], 2, 1).unwrap();
+//! let p = PolySequence::new([1, -1, 2], 0..1, 2).unwrap();
 //! ```
 //!
-//! You can evaluate this polynomial for some `x` using [`Eval::eval()`]:
+//! You can evaluate this polynomial for some `x` using [`PolySequence::eval()`]:
 //!
 //! ```
-//! # use nutils_poly::{Eval as _, PartialDeriv as _, PolySequence};
+//! # use nutils_poly::{Poly, PolySequence, Variable};
 //! #
-//! # let p = PolySequence::new([1, -1, 2], 2, 1).unwrap();
-//! assert_eq!(p.eval(&[0]), 2); // x = 0
-//! assert_eq!(p.eval(&[1]), 2); // x = 1
-//! assert_eq!(p.eval(&[2]), 4); // x = 2
+//! # let p = PolySequence::new([1, -1, 2], 0..1, 2).unwrap();
+//! assert_eq!(p.by_ref().eval(&[0]), 2); // x = 0
+//! assert_eq!(p.by_ref().eval(&[1]), 2); // x = 1
+//! assert_eq!(p.by_ref().eval(&[2]), 4); // x = 2
 //! ```
 //!
 //! Or compute the partial derivative `∂p/∂x` using [`PartialDeriv::partial_deriv()`]:
 //!
 //! ```
-//! # use nutils_poly::{Eval as _, PartialDeriv as _, PolySequence};
+//! # use nutils_poly::{Poly, PolySequence, Variable};
 //! #
-//! # let p = PolySequence::new([1, -1, 2], 2, 1).unwrap();
-//! assert_eq!(p.partial_deriv(0), Some(PolySequence::new(vec![2, -1], 1, 1).unwrap()));
+//! # let p = PolySequence::new([1, -1, 2], 0..1, 2).unwrap();
+//! assert_eq!(
+//!     p.by_ref().partial_deriv(Variable::try_from(0).unwrap()).collect(),
+//!     PolySequence::new(vec![2, -1], 0..1, 1).unwrap(),
+//! );
 //! ```
 //!
 //! [lexicographic order]: https://en.wikipedia.org/wiki/Lexicographic_order
 
 #![cfg_attr(feature = "bench", feature(test))]
 
-use num_traits::cast::FromPrimitive;
 use num_traits::Zero;
 use std::iter;
-use std::marker::PhantomData;
 use std::ops;
 
-#[derive(Debug, Clone, PartialEq)]
+/// An interface for finite sequences.
+pub trait Sequence {
+    type Item;
+
+    /// Returns the number of elements in the sequence.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if the slice is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns a reference to an element or `None` if the index is out of bounds.
+    fn get(&self, index: usize) -> Option<&Self::Item>;
+
+    /// Returns a reference to the first element or `None`.
+    #[inline]
+    fn first(&self) -> Option<&Self::Item> {
+        self.get(0)
+    }
+
+    /// Returns a reference to the last element or `None`.
+    #[inline]
+    fn last(&self) -> Option<&Self::Item> {
+        self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    /// Returns a reference to an element, without doing bounds checking.
+    #[inline]
+    unsafe fn get_unchecked(&self, index: usize) -> &Self::Item {
+        self.get(index).unwrap()
+    }
+}
+
+/// An interface for finite sequences with mutable elements.
+pub trait MutSequence: Sequence {
+    /// Returns a mutable reference to an element or `None` if the index is out of bounds.
+    fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item>;
+
+    /// Returns a reference to the first element or `None`.
+    #[inline]
+    fn first_mut(&mut self) -> Option<&mut Self::Item> {
+        self.get_mut(0)
+    }
+
+    /// Returns a reference to the last element or `None`.
+    #[inline]
+    fn last_mut(&mut self) -> Option<&mut Self::Item> {
+        self.len()
+            .checked_sub(1)
+            .and_then(|index| self.get_mut(index))
+    }
+
+    /// Returns a mutable reference to an element, without doing bounds checking.
+    #[inline]
+    unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut Self::Item {
+        self.get_mut(index).unwrap()
+    }
+}
+
+macro_rules! impl_sequence_for_as_ref_slice {
+    ($T:ident, $ty:ty, <$($params:tt)*) => {
+
+        impl<$($params)* Sequence for $ty {
+            type Item = $T;
+
+            #[inline]
+            fn len(&self) -> usize {
+                <Self as AsRef::<[$T]>>::as_ref(self).len()
+            }
+            #[inline]
+            fn get(&self, index: usize) -> Option<&$T> {
+                <Self as AsRef::<[$T]>>::as_ref(self).get(index)
+            }
+            #[inline]
+            unsafe fn get_unchecked(&self, index: usize) -> &$T {
+                <Self as AsRef::<[$T]>>::as_ref(self).get_unchecked(index)
+            }
+        }
+
+        impl<$($params)* MutSequence for $ty {
+            #[inline]
+            fn get_mut(&mut self, index: usize) -> Option<&mut $T> {
+                <Self as AsMut::<[$T]>>::as_mut(self).get_mut(index)
+            }
+            #[inline]
+            unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut $T {
+                <Self as AsMut::<[$T]>>::as_mut(self).get_unchecked_mut(index)
+            }
+        }
+    };
+}
+
+impl_sequence_for_as_ref_slice! {T, [T], <T>}
+impl_sequence_for_as_ref_slice! {T, [T; N], <T, const N: usize>}
+impl_sequence_for_as_ref_slice! {T, Vec<T>, <T>}
+impl_sequence_for_as_ref_slice! {T, Box<[T]>, <T>}
+
+impl<S: Sequence + ?Sized> Sequence for &S {
+    type Item = S::Item;
+
+    #[inline]
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+    #[inline]
+    fn get(&self, index: usize) -> Option<&S::Item> {
+        (**self).get(index)
+    }
+    #[inline]
+    unsafe fn get_unchecked(&self, index: usize) -> &S::Item {
+        (**self).get_unchecked(index)
+    }
+}
+
+impl<S: Sequence + ?Sized> Sequence for &mut S {
+    type Item = S::Item;
+
+    #[inline]
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+    #[inline]
+    fn get(&self, index: usize) -> Option<&S::Item> {
+        (**self).get(index)
+    }
+    #[inline]
+    unsafe fn get_unchecked(&self, index: usize) -> &S::Item {
+        (**self).get_unchecked(index)
+    }
+}
+
+impl<S: MutSequence + ?Sized> MutSequence for &mut S {
+    #[inline]
+    fn get_mut(&mut self, index: usize) -> Option<&mut S::Item> {
+        (**self).get_mut(index)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    AssignDifferentNumberOfVariables,
+    AssignMissingVariables,
     AssignLowerDegree,
+    NCoeffsNVarsDegreeMismatch,
+    VariableOutOfRange,
+    DuplicateVariable,
+    VariablesNotSorted,
 }
 
 impl std::error::Error for Error {}
@@ -75,54 +219,56 @@ impl std::error::Error for Error {}
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AssignDifferentNumberOfVariables => write!(f, "The number of variables of the destination polynomial differs from that of the source."),
-            Self::AssignLowerDegree => write!(f, "The degree of the destination polynomial is lower than the degree of the source."),
+            Self::AssignMissingVariables => write!(
+                f,
+                "Some or all variables of the source are missing in the destination."
+            ),
+            Self::AssignLowerDegree => write!(
+                f,
+                "The degree of the destination polynomial is lower than the degree of the source."
+            ),
+            Self::NCoeffsNVarsDegreeMismatch => write!(
+                f,
+                "The number of coefficients is not compatible with the number of variables and degree."
+            ),
+            Self::VariableOutOfRange => write!(
+                f,
+                "The variable is out of range."
+            ),
+            Self::DuplicateVariable => write!(
+                f,
+                "Duplicate variable.",
+            ),
+            Self::VariablesNotSorted => write!(
+                f,
+                "The variables are not sorted.",
+            ),
         }
     }
 }
 
-#[inline]
-fn uniform_vec<T: Clone>(item: T, len: usize) -> Vec<T> {
-    iter::repeat(item).take(len).collect()
-}
-
-#[inline]
-fn uniform_vec_with<T, F>(gen_item: F, len: usize) -> Vec<T>
-where
-    F: FnMut() -> T,
-{
-    iter::repeat_with(gen_item).take(len).collect()
-}
-
-#[inline]
-fn uniform_box<T: Clone>(item: T, len: usize) -> Box<[T]> {
-    iter::repeat(item).take(len).collect()
-}
-
-#[inline]
-fn uniform_box_with<T, F>(gen_item: F, len: usize) -> Box<[T]>
-where
-    F: FnMut() -> T,
-{
-    iter::repeat_with(gen_item).take(len).collect()
+impl From<std::convert::Infallible> for Error {
+    fn from(_infallible: std::convert::Infallible) -> Self {
+        unreachable! {}
+    }
 }
 
 /// Returns the number of coefficients for a polynomial of given degree and number of variables.
 #[inline]
-pub const fn ncoeffs(degree: usize, nvars: usize) -> usize {
+pub const fn ncoeffs(nvars: usize, degree: usize) -> usize {
     // To improve the performance the implementation is specialized for
     // polynomials in zero to three variables.
     match nvars {
-        0 => ncoeffs_impl(degree, 0),
-        1 => ncoeffs_impl(degree, 1),
-        2 => ncoeffs_impl(degree, 2),
-        3 => ncoeffs_impl(degree, 3),
-        _ => ncoeffs_impl(degree, nvars),
+        0 => ncoeffs_impl(0, degree),
+        1 => ncoeffs_impl(1, degree),
+        2 => ncoeffs_impl(2, degree),
+        3 => ncoeffs_impl(3, degree),
+        _ => ncoeffs_impl(nvars, degree),
     }
 }
 
 #[inline]
-const fn ncoeffs_impl(degree: usize, nvars: usize) -> usize {
+const fn ncoeffs_impl(nvars: usize, degree: usize) -> usize {
     let mut n = 1;
     let mut i = 1;
     while i <= nvars {
@@ -134,20 +280,20 @@ const fn ncoeffs_impl(degree: usize, nvars: usize) -> usize {
 
 /// Returns the sum of the number of coefficients up to (excluding) the given degree.
 #[inline]
-const fn ncoeffs_sum(degree: usize, nvars: usize) -> usize {
+const fn ncoeffs_sum(nvars: usize, degree: usize) -> usize {
     // To improve the performance the implementation is specialized for
     // polynomials in zero to three variables.
     match nvars {
-        0 => ncoeffs_sum_impl(degree, 0),
-        1 => ncoeffs_sum_impl(degree, 1),
-        2 => ncoeffs_sum_impl(degree, 2),
-        3 => ncoeffs_sum_impl(degree, 3),
-        _ => ncoeffs_sum_impl(degree, nvars),
+        0 => ncoeffs_sum_impl(0, degree),
+        1 => ncoeffs_sum_impl(1, degree),
+        2 => ncoeffs_sum_impl(2, degree),
+        3 => ncoeffs_sum_impl(3, degree),
+        _ => ncoeffs_sum_impl(nvars, degree),
     }
 }
 
 #[inline]
-const fn ncoeffs_sum_impl(degree: usize, nvars: usize) -> usize {
+const fn ncoeffs_sum_impl(nvars: usize, degree: usize) -> usize {
     let mut n = 1;
     let mut i = 0;
     while i <= nvars {
@@ -160,18 +306,7 @@ const fn ncoeffs_sum_impl(degree: usize, nvars: usize) -> usize {
 // TODO: Compact representation of `Powers`:
 //
 // #[derive(Debug, Clone)]
-// enum Powers {
-//     /// Limited to six variables and degree 255.
-//     Inline {
-//         len: u8,
-//         powers: [u8; 6],
-//     },
-//     /// Unlimited.
-//     Boxed(Box<Vec<usize>>),
-// }
-//
-// impl Sequence<usize> for Powers { ... }
-// impl MutSequence<usize> for Powers { ... }
+// struct Powers(SmallVec<u8>);
 
 /// Returns the index of the coefficient for the given powers.
 ///
@@ -185,7 +320,7 @@ pub fn powers_to_index(powers: &[usize], degree: usize) -> Option<usize> {
         .rev()
         .try_fold((0, degree), |(index, degree), (nvars, power)| {
             let degree = degree.checked_sub(power)?;
-            let index = index + ncoeffs_sum(degree, nvars);
+            let index = index + ncoeffs_sum(nvars, degree);
             Some((index, degree))
         })
         .map(|(index, _)| index)
@@ -200,7 +335,7 @@ fn powers_rev_iter_to_index(
     let mut index = 0;
     for nvars in (1..nvars).rev() {
         degree = degree.checked_sub(rev_powers.next().unwrap())?;
-        index += ncoeffs_sum(degree, nvars);
+        index += ncoeffs_sum(nvars, degree);
     }
     degree
         .checked_sub(rev_powers.next().unwrap())
@@ -212,9 +347,9 @@ fn powers_rev_iter_to_index(
 /// Returns `None` if the index is larger or equal to the number of coeffients
 /// for the given degree and number of variables.
 #[inline]
-pub fn index_to_powers(index: usize, degree: usize, nvars: usize) -> Option<Vec<usize>> {
+pub fn index_to_powers(index: usize, nvars: usize, degree: usize) -> Option<Vec<usize>> {
     // FIXME: return None if index is out of bounds
-    let mut powers = uniform_vec(0, nvars);
+    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
     index_to_powers_increment(index, degree, &mut powers).map(|()| powers)
 }
 
@@ -229,10 +364,13 @@ fn index_to_powers_increment(
     }
     'outer: for ivar in (1..powers.len()).rev() {
         for i in 0..=degree {
-            let n = ncoeffs(i, ivar);
+            let n = ncoeffs(ivar, i);
             if index < n {
                 powers[ivar] += degree - i;
-                degree = i;
+                #[allow(clippy::mut_range_bound)]
+                {
+                    degree = i;
+                }
                 continue 'outer;
             }
             index -= n;
@@ -260,6 +398,14 @@ impl PowersIter {
     /// Returns a reference to the next vector of powers in reverse lexicographic order.
     #[inline]
     fn next(&mut self) -> Option<&[usize]> {
+        if self.powers.len() == 0 {
+            if self.rem > 0 {
+                self.rem = 0;
+                return Some(&self.powers);
+            } else {
+                return None;
+            }
+        }
         if let Some(power) = self.powers[0].checked_sub(1) {
             self.powers[0] = power;
             self.rem += 1;
@@ -304,16 +450,17 @@ impl PowersIter {
 }
 
 /// Returns a lending iterator of powers in reverse lexicographic order.
-fn powers_iter(degree: usize, nvars: usize) -> PowersIter {
-    let mut powers = uniform_vec(0, nvars);
+fn powers_iter(nvars: usize, degree: usize) -> PowersIter {
+    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
+    let rem: usize;
     if nvars > 0 {
         powers[nvars - 1] = degree;
         powers[0] += 1;
+        rem = 0;
+    } else {
+        rem = 1;
     }
-    PowersIter {
-        powers: powers,
-        rem: 0,
-    }
+    PowersIter { powers, rem }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -343,534 +490,835 @@ impl Iterator for SumOfPowersIter {
     }
 }
 
-// Workaround for associated type `Iter<'a>: Iterator<Item = &'a T>` of
-// `Sequence` from
-// https://web.archive.org/web/20220530082425/https://sabrinajewson.org/blog/the-better-alternative-to-lifetime-gats#the-better-gats
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Variable(u8);
 
-/// An interface for finite sequences.
-pub trait Sequence<T>
-where
-    Self: for<'this> SequenceIterType<'this, &'this T>,
-{
-    /// Returns the number of elements in the sequence.
-    fn len(&self) -> usize;
+impl TryFrom<u8> for Variable {
+    type Error = Error;
 
-    /// Returns a reference to an element or `None` if the index is out of bounds.
-    fn get(&self, index: usize) -> Option<&T>;
-
-    /// Returns a reference to an element, without doing bounds checking.
     #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &T {
-        self.get(index).unwrap()
+    fn try_from(var: u8) -> Result<Self, Error> {
+        if var >= u64::BITS as u8 {
+            Err(Error::VariableOutOfRange)
+        } else {
+            Ok(Self(var))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Variables(u64);
+
+impl Variables {
+    /// Returns the number of variables in the set.
+    #[inline]
+    pub const fn len(&self) -> usize {
+        let mut rem = self.0;
+        let mut len = 0;
+        while rem != 0 {
+            len += (rem & 1) as usize;
+            rem >>= 1;
+        }
+        len
     }
 
-    /// Returns an iterator over the sequence.
-    fn iter(&self) -> <Self as SequenceIterType<'_, &T>>::Iter;
-}
-
-/// An interface for finite sequences with mutable elements.
-pub trait MutSequence<T>: Sequence<T>
-where
-    Self: for<'this> SequenceIterMutType<'this, &'this mut T>,
-{
-    /// Returns a mutable reference to an element or `None` if the index is out of bounds.
-    fn get_mut(&mut self, index: usize) -> Option<&mut T>;
-
-    /// Returns a mutable reference to an element, without doing bounds checking.
+    /// Returns `true` if the set of variables is empty.
     #[inline]
-    unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut T {
-        self.get_mut(index).unwrap()
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
     }
 
-    /// Returns an iterator over the sequence that allows modifying each element.
-    fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut T>>::IterMut;
+    /// Creates an empty set of variables.
+    #[inline]
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Returns `true` if the variable is in the set.
+    #[inline]
+    pub const fn get(&self, var: Variable) -> bool {
+        (self.0 >> var.0) & 1 == 1
+    }
+
+    /// Returns the index of the variable in the set or `None` if the variable is not in the set.
+    #[inline]
+    pub const fn index(&self, var: Variable) -> Option<usize> {
+        if self.get(var) {
+            Some(Variables(self.0 & !(u64::MAX << var.0)).len())
+        } else {
+            None
+        }
+    }
+
+    pub const fn first(&self) -> Option<Variable> {
+        if self.0 == 0 {
+            None
+        } else {
+            let mut val = self.0;
+            let mut var = 0;
+            while (val & 1) == 0 {
+                val >>= 1;
+                var += 1;
+            }
+            Some(Variable(var))
+        }
+    }
+
+    pub const fn last(&self) -> Option<Variable> {
+        if self.0 == 0 {
+            None
+        } else {
+            let mut val = self.0;
+            let mut var = 0;
+            while val != 0 {
+                val >>= 1;
+                var += 1;
+            }
+            Some(Variable(var))
+        }
+    }
+
+    pub const fn iter(&self) -> VariablesIter {
+        VariablesIter(self.0, 0)
+    }
+
+    /// Returns `true` if all variables in this set are sorted before those in the other set.
+    #[inline]
+    pub const fn all_less_then(&self, other: Variables) -> bool {
+        let first = if let Some(first) = other.first() {
+            first.0
+        } else {
+            0
+        };
+        self.0 >> first == 0
+    }
+
+    /// Returns `true` if all variables in this set are contained in the other set.
+    #[inline]
+    pub const fn is_contained_in(&self, other: Variables) -> bool {
+        self.0 & !other.0 == 0
+    }
 }
 
-/// Return type of [`Sequence::iter()`].
-pub trait SequenceIterType<'this, T> {
-    /// Return type of [`Sequence::iter()`].
-    type Iter: Iterator<Item = T>;
+impl std::fmt::Display for Variables {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Variables[")?;
+        let mut iter = self.iter();
+        if let Some(var) = iter.next() {
+            write!(f, "{}", var.0)?;
+            for var in iter {
+                write!(f, ", {}", var.0)?;
+            }
+        }
+        write!(f, "]")
+    }
 }
 
-/// Return type of [`MutSequence::iter_mut()`].
-pub trait SequenceIterMutType<'this, T> {
-    /// Return type of [`MutSequence::iter_mut()`].
-    type IterMut: Iterator<Item = T>;
+impl ops::BitAnd for Variables {
+    type Output = Self;
+
+    #[inline]
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0 & rhs.0)
+    }
 }
 
-macro_rules! impl_sequence_for_as_ref_slice {
-    ($T:ident, $ty:ty, <$($params:tt)*) => {
-        impl<'this, $($params)* SequenceIterType<'this, &'this $T> for $ty {
-            type Iter = std::slice::Iter<'this, T>;
+impl ops::BitOr for Variables {
+    type Output = Self;
+
+    #[inline]
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl ops::BitXor for Variables {
+    type Output = Self;
+
+    #[inline]
+    fn bitxor(self, rhs: Self) -> Self {
+        Self(self.0 ^ rhs.0)
+    }
+}
+
+impl ops::Sub for Variables {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 & !rhs.0)
+    }
+}
+
+impl TryFrom<ops::Range<usize>> for Variables {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(value: ops::Range<usize>) -> Result<Self, Error> {
+        if value.end > u64::BITS as usize {
+            Err(Error::VariableOutOfRange)
+        } else {
+            let mut vars = 0;
+            for i in value {
+                vars |= 1 << i;
+            }
+            Ok(Variables(vars))
+        }
+    }
+}
+
+impl TryFrom<&[usize]> for Variables {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(value: &[usize]) -> Result<Self, Error> {
+        let mut vars = 0;
+        for i in value {
+            let i = *i;
+            if i >= u64::BITS as usize {
+                return Err(Error::VariableOutOfRange);
+            } else if (vars >> i) & 1 == 1 {
+                return Err(Error::DuplicateVariable);
+            } else if (vars >> i) != 0 {
+                return Err(Error::VariablesNotSorted);
+            } else {
+                vars |= 1 << i;
+            }
+        }
+        Ok(Variables(vars))
+    }
+}
+
+impl<const N: usize> TryFrom<[usize; N]> for Variables {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(value: [usize; N]) -> Result<Self, Error> {
+        let mut vars = 0;
+        for i in value {
+            if i >= u64::BITS as usize {
+                return Err(Error::VariableOutOfRange);
+            } else if (vars >> i) & 1 == 1 {
+                return Err(Error::DuplicateVariable);
+            } else if (vars >> i) != 0 {
+                return Err(Error::VariablesNotSorted);
+            } else {
+                vars |= 1 << i;
+            }
+        }
+        Ok(Variables(vars))
+    }
+}
+
+pub struct VariablesIter(u64, u8);
+
+impl Iterator for VariablesIter {
+    type Item = Variable;
+
+    #[inline]
+    fn next(&mut self) -> Option<Variable> {
+        if self.0 == 0 {
+            None
+        } else {
+            while (self.0 & 1) == 0 {
+                self.1 += 1;
+                self.0 >>= 1;
+            }
+            let v = Variable(self.1);
+            self.1 += 1;
+            self.0 >>= 1;
+            Some(v)
+        }
+    }
+}
+
+pub trait IntegerMultiple {
+    type Output;
+    fn integer_multiple(self, n: usize) -> Self::Output;
+}
+
+macro_rules! impl_int_mul {
+    ($T:ty $(,)?) => {
+        impl IntegerMultiple for $T {
+            type Output = $T;
+            #[inline]
+            fn integer_multiple(self, n: usize) -> $T {
+                self * n as $T
+            }
         }
 
-        impl<'this, $($params)* SequenceIterMutType<'this, &'this mut $T> for $ty {
-            type IterMut = std::slice::IterMut<'this, $T>;
-        }
-
-        impl<$($params)* Sequence<$T> for $ty {
+        impl IntegerMultiple for &$T {
+            type Output = $T;
             #[inline]
-            fn len(&self) -> usize {
-                <Self as AsRef::<[$T]>>::as_ref(self).len()
-            }
-            #[inline]
-            fn get(&self, index: usize) -> Option<&$T> {
-                <Self as AsRef::<[$T]>>::as_ref(self).get(index)
-            }
-            #[inline]
-            unsafe fn get_unchecked(&self, index: usize) -> &$T {
-                <Self as AsRef::<[$T]>>::as_ref(self).get_unchecked(index)
-            }
-            #[inline]
-            fn iter(&self) -> <Self as SequenceIterType<'_, &$T>>::Iter {
-                <Self as AsRef::<[$T]>>::as_ref(self).iter()
-            }
-        }
-
-        impl<$($params)* MutSequence<$T> for $ty {
-            #[inline]
-            fn get_mut(&mut self, index: usize) -> Option<&mut $T> {
-                <Self as AsMut::<[$T]>>::as_mut(self).get_mut(index)
-            }
-            #[inline]
-            unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut $T {
-                <Self as AsMut::<[$T]>>::as_mut(self).get_unchecked_mut(index)
-            }
-            #[inline]
-            fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut $T>>::IterMut {
-                <Self as AsMut::<[$T]>>::as_mut(self).iter_mut()
+            fn integer_multiple(self, n: usize) -> $T {
+                self * n as $T
             }
         }
     };
+    ($T:ty, $($tail:tt)*) => {
+        impl_int_mul!{$T}
+        impl_int_mul!{$($tail)*}
+    };
 }
 
-impl_sequence_for_as_ref_slice! {T, [T], <T>}
-impl_sequence_for_as_ref_slice! {T, [T; N], <T, const N: usize>}
-impl_sequence_for_as_ref_slice! {T, Vec<T>, <T>}
-impl_sequence_for_as_ref_slice! {T, Box<[T]>, <T>}
+impl_int_mul! {u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64}
 
-impl<'this, T, S: SequenceIterType<'this, &'this T> + ?Sized> SequenceIterType<'this, &'this T>
-    for &S
-{
-    type Iter = <S as SequenceIterType<'this, &'this T>>::Iter;
-}
+pub trait Poly: Sized {
+    type Coeff;
+    type CoeffsIter: Iterator<Item = Self::Coeff>;
 
-impl<'this, T, S: SequenceIterType<'this, &'this T> + ?Sized> SequenceIterType<'this, &'this T>
-    for &mut S
-{
-    type Iter = <S as SequenceIterType<'this, &'this T>>::Iter;
-}
+    fn vars(&self) -> Variables;
 
-impl<'this, T, S: SequenceIterMutType<'this, &'this mut T> + ?Sized>
-    SequenceIterMutType<'this, &'this mut T> for &mut S
-{
-    type IterMut = <S as SequenceIterMutType<'this, &'this mut T>>::IterMut;
-}
+    #[inline]
+    fn nvars(&self) -> usize {
+        self.vars().len()
+    }
 
-impl<T, S: Sequence<T> + ?Sized> Sequence<T> for &S {
-    #[inline]
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-    #[inline]
-    fn get(&self, index: usize) -> Option<&T> {
-        (**self).get(index)
-    }
-    #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &T {
-        (**self).get_unchecked(index)
-    }
-    #[inline]
-    fn iter(&self) -> <Self as SequenceIterType<'_, &T>>::Iter {
-        (**self).iter()
-    }
-}
-
-impl<T, S: Sequence<T> + ?Sized> Sequence<T> for &mut S {
-    #[inline]
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-    #[inline]
-    fn get(&self, index: usize) -> Option<&T> {
-        (**self).get(index)
-    }
-    #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &T {
-        (**self).get_unchecked(index)
-    }
-    #[inline]
-    fn iter(&self) -> <Self as SequenceIterType<'_, &T>>::Iter {
-        (**self).iter()
-    }
-}
-
-impl<T, S: MutSequence<T> + ?Sized> MutSequence<T> for &mut S {
-    #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
-        (**self).get_mut(index)
-    }
-    #[inline]
-    fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut T>>::IterMut {
-        (**self).iter_mut()
-    }
-}
-
-pub trait Dimensions {
     fn degree(&self) -> usize;
-    fn nvars(&self) -> usize;
-}
 
-impl<'this, T: Dimensions> Dimensions for &'this T {
     #[inline]
-    fn degree(&self) -> usize {
-        (**self).degree()
-    }
-    #[inline]
-    fn nvars(&self) -> usize {
-        (**self).nvars()
-    }
-}
-
-/// Polynomial with the coefficients stored in a [`Sequence`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct PolySequence<Coeff, Coeffs>
-where
-    Coeffs: Sequence<Coeff>,
-{
-    coeffs: Coeffs,
-    degree: usize,
-    nvars: usize,
-    phantom: PhantomData<Coeff>,
-}
-
-impl<Coeff, Coeffs> Dimensions for PolySequence<Coeff, Coeffs>
-where
-    Coeffs: Sequence<Coeff>,
-{
-    #[inline]
-    fn degree(&self) -> usize {
-        self.degree
+    fn is_constant(&self) -> bool {
+        self.degree() == 0 || self.vars().is_empty()
     }
 
-    #[inline]
-    fn nvars(&self) -> usize {
-        self.nvars
-    }
-}
+    fn coeffs_iter(self) -> Self::CoeffsIter;
 
-// Return type of `PolySequence::iter()`.
-type PolySequenceIter<'a, Coeff, Coeffs> =
-    PolyIter<&'a Coeff, <Coeffs as SequenceIterType<'a, &'a Coeff>>::Iter>;
-
-impl<Coeff, Coeffs> PolySequence<Coeff, Coeffs>
-where
-    Coeffs: Sequence<Coeff>,
-{
     #[inline]
-    pub fn new(coeffs: Coeffs, degree: usize, nvars: usize) -> Option<Self> {
-        (coeffs.len() == ncoeffs(degree, nvars)).then(|| Self {
-            coeffs,
-            degree,
-            nvars,
-            phantom: PhantomData,
-        })
-    }
-
-    /// Returns a [`PolyIter`] with references to the coefficients of this polynomial.
-    #[inline]
-    pub fn iter(&self) -> PolySequenceIter<Coeff, Coeffs> {
-        PolyIter {
-            coeffs_iter: self.coeffs.iter(),
-            degree: self.degree,
-            nvars: self.nvars,
-        }
-    }
-
-    /// Converts this polynomial into a [`PolyIter`].
-    #[inline]
-    pub fn into_iter(self) -> PolyIter<Coeff, <Coeffs as IntoIterator>::IntoIter>
+    fn eval<Value, Values>(self, values: &Values) -> Value
     where
-        Coeffs: IntoIterator<Item = Coeff>,
+        Value: Zero + ops::AddAssign + ops::AddAssign<Self::Coeff>,
+        for<'v> Value: ops::MulAssign<&'v Value>,
+        Values: Sequence<Item = Value> + ?Sized,
     {
-        PolyIter {
-            coeffs_iter: self.coeffs.into_iter(),
-            degree: self.degree,
-            nvars: self.nvars,
-        }
+        assert!(values.len() >= self.nvars());
+        let degree = self.degree();
+        DefaultEvalCoeffsIter.eval_iter(&mut self.coeffs_iter(), degree, &values)
     }
 
-    /// Assign a polynomial to this polynomial.
-    ///
-    /// Returns an error if the number of variables of the source is not equal
-    /// to the number of this polynomial, or if the degree of the source is
-    /// higher than the degree of this polynomial.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use nutils_poly::{PartialDeriv as _, PolySequence};
-    ///
-    /// let p = PolySequence::new([1, -1, 2], 2, 1).unwrap();
-    /// let mut q = PolySequence::new([0, 0, 0, 0], 3, 1).unwrap();
-    /// q.assign(p.into_iter()).unwrap();
-    /// assert_eq!(q, PolySequence::new([0, 1, -1, 2], 3, 1).unwrap());
-    /// ```
-    #[must_use]
-    pub fn assign<SrcCoeffs>(&mut self, iter: PolyIter<Coeff, SrcCoeffs>) -> Result<(), Error>
+    #[inline]
+    fn partial_deriv(self, var: Variable) -> PartialDeriv<Self>
     where
-        Coeff: Zero,
-        Coeffs: MutSequence<Coeff>,
-        SrcCoeffs: Iterator<Item = Coeff>,
+        Self::Coeff: IntegerMultiple,
+        <Self::Coeff as IntegerMultiple>::Output: Zero,
     {
-        if iter.nvars != self.nvars {
-            Err(Error::AssignDifferentNumberOfVariables)
-        } else if iter.degree > self.degree {
+        PartialDeriv { poly: self, var }
+    }
+
+    #[inline]
+    fn mul<Rhs, OCoeff>(self, rhs: Rhs) -> Mul<Self, Rhs>
+    where
+        Rhs: Poly,
+        Rhs::CoeffsIter: Clone,
+        Self::Coeff: ops::Mul<Rhs::Coeff, Output = OCoeff> + Clone,
+        OCoeff: ops::AddAssign + Zero,
+    {
+        Mul { lhs: self, rhs }
+    }
+
+    fn assign_to<TargetCoeffs>(self, target: &mut PolySequence<TargetCoeffs>) -> Result<(), Error>
+    where
+        Self::Coeff: Zero,
+        TargetCoeffs: Sequence<Item = Self::Coeff> + MutSequence + IntoIterator<Item = Self::Coeff>,
+        for<'a> &'a mut TargetCoeffs: IntoIterator<Item = &'a mut Self::Coeff>,
+    {
+        let degree = self.degree();
+        if target.degree() < degree {
             Err(Error::AssignLowerDegree)
-        } else if iter.degree == self.degree {
-            for (dst, src) in iter::zip(self.coeffs.iter_mut(), iter.coeffs_iter) {
-                *dst = src;
+        } else if !self.vars().is_contained_in(target.vars()) {
+            Err(Error::AssignMissingVariables)
+        } else if target.degree() == degree && target.vars() == self.vars() {
+            for (t, s) in iter::zip((&mut target.coeffs).into_iter(), self.coeffs_iter()) {
+                *t = s;
+            }
+            Ok(())
+        } else if target.vars() == self.vars() {
+            let powers = powers_iter(target.nvars(), target.degree()).sum_of_powers();
+            let mut source = self.coeffs_iter();
+            for (t, p) in iter::zip(&mut target.coeffs, powers) {
+                if p < degree {
+                    if let Some(s) = source.next() {
+                        *t = s;
+                    } else {
+                        break;
+                    }
+                } else {
+                    *t = Self::Coeff::zero();
+                }
             }
             Ok(())
         } else {
-            let pick = powers_iter(self.degree, self.nvars)
-                .sum_of_powers()
-                .map(|p| p < self.degree);
-            let mut src = iter.coeffs_iter;
-            for (dst, pick) in iter::zip(self.coeffs.iter_mut(), pick) {
-                *dst = if pick {
-                    src.next().unwrap()
+            let indices: Vec<_> = self
+                .vars()
+                .iter()
+                .map(|var| target.vars().index(var).unwrap())
+                .collect();
+            let mut powers = powers_iter(target.nvars(), target.degree());
+            let mut target = (&mut target.coeffs).into_iter();
+            let mut source = self.coeffs_iter();
+            while let (Some(t), Some(powers)) = (target.next(), powers.next()) {
+                if indices.iter().map(|i| powers[*i]).sum::<usize>() < degree {
+                    if let Some(s) = source.next() {
+                        *t = s;
+                    } else {
+                        break;
+                    }
                 } else {
-                    Coeff::zero()
-                };
+                    *t = Self::Coeff::zero();
+                }
             }
             Ok(())
         }
     }
-}
 
-impl<Coeff, Coeffs> PolySlice<Coeff, Coeffs> where Coeffs: AsRef<[Coeff]> {}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PolySlice<Coeff, Coeffs>
-where
-    Coeffs: AsRef<[Coeff]>,
-{
-    coeffs: Coeffs,
-    degree: usize,
-    nvars: usize,
-    phantom: PhantomData<Coeff>,
-}
-
-impl<Coeff, Coeffs> PolySlice<Coeff, Coeffs>
-where
-    Coeffs: AsRef<[Coeff]>,
-{
-    pub fn new(coeffs: Coeffs, degree: usize, nvars: usize) -> Option<Self> {
-        (coeffs.as_ref().len() == ncoeffs(degree, nvars)).then(|| Self {
-            coeffs,
-            degree,
-            nvars,
-            phantom: PhantomData,
-        })
-    }
-}
-
-// Return type of `PolySlice::iter()`.
-type PolySliceIter<'a, Coeff> = PolyIter<&'a Coeff, std::slice::Iter<'a, Coeff>>;
-
-impl<Coeff, Coeffs> PolySlice<Coeff, Coeffs>
-where
-    Coeffs: AsRef<[Coeff]>,
-{
-    #[inline]
-    pub fn iter(&self) -> PolySliceIter<Coeff> {
-        PolyIter {
-            coeffs_iter: self.coeffs.as_ref().iter(),
-            degree: self.degree,
-            nvars: self.nvars,
+    fn add_to<TargetCoeff, TargetCoeffs>(
+        self,
+        target: &mut PolySequence<TargetCoeffs>,
+    ) -> Result<(), Error>
+    where
+        TargetCoeff: ops::AddAssign<Self::Coeff>,
+        TargetCoeffs: Sequence<Item = TargetCoeff> + MutSequence + IntoIterator<Item = TargetCoeff>,
+        for<'a> &'a mut TargetCoeffs: IntoIterator<Item = &'a mut TargetCoeff>,
+    {
+        let degree = self.degree();
+        if target.degree() < degree {
+            Err(Error::AssignLowerDegree)
+        } else if !self.vars().is_contained_in(target.vars()) {
+            Err(Error::AssignMissingVariables)
+        } else if target.degree() == degree && target.vars() == self.vars() {
+            for (t, s) in iter::zip((&mut target.coeffs).into_iter(), self.coeffs_iter()) {
+                *t += s;
+            }
+            Ok(())
+        } else if target.vars() == self.vars() {
+            let powers = powers_iter(target.nvars(), target.degree()).sum_of_powers();
+            let mut source = self.coeffs_iter();
+            for (t, p) in iter::zip(&mut target.coeffs, powers) {
+                if p < degree {
+                    if let Some(s) = source.next() {
+                        *t += s;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        } else {
+            let sindices: Vec<_> = self
+                .vars()
+                .iter()
+                .map(|var| target.vars().index(var).unwrap())
+                .collect();
+            let tdegree = target.degree();
+            let tnvars = target.nvars();
+            let mut spowers = powers_iter(self.nvars(), self.degree());
+            let mut tpowers = iter::repeat(0).take(tnvars).collect::<Vec<_>>();
+            let mut scoeffs = self.coeffs_iter();
+            while let (Some(sc), Some(sp)) = (scoeffs.next(), spowers.next()) {
+                for (i, p) in iter::zip(&sindices, sp.iter()) {
+                    tpowers[*i] = *p;
+                }
+                let ti = powers_rev_iter_to_index(tpowers.iter().rev().copied(), tdegree, tnvars)
+                    .unwrap();
+                *target.coeffs.get_mut(ti).unwrap() += sc;
+            }
+            Ok(())
         }
     }
+
+    fn collect<TargetCoeffs>(self) -> PolySequence<TargetCoeffs>
+    where
+        TargetCoeffs: Sequence<Item = Self::Coeff>
+            + IntoIterator<Item = Self::Coeff>
+            + FromIterator<Self::Coeff>,
+    {
+        let vars = self.vars();
+        let degree = self.degree();
+        let coeffs = self.coeffs_iter().collect();
+        PolySequence::new_unchecked(coeffs, vars, degree)
+    }
 }
 
-/// Polynomial with the coefficients stored in an [`Iterator`].
-///
-/// This struct is typically created by [`PolySequence::iter()`] or functions
-/// that derive a polynomial from one or more polynomials, e.g.
-/// [`PartialDeriv::partial_deriv_iter()`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct PolyIter<Coeff, CoeffsIter>
-where
-    CoeffsIter: Iterator<Item = Coeff>,
-{
-    coeffs_iter: CoeffsIter,
+pub struct PolySequence<Coeffs> {
+    coeffs: Coeffs,
+    vars: Variables,
     degree: usize,
-    nvars: usize,
 }
 
-impl<Coeff, CoeffsIter> Dimensions for PolyIter<Coeff, CoeffsIter>
+impl<Coeff, Coeffs> PolySequence<Coeffs>
 where
-    CoeffsIter: Iterator<Item = Coeff>,
+    Coeffs: Sequence<Item = Coeff> + IntoIterator<Item = Coeff>,
 {
+    #[inline]
+    pub fn new<Vars>(coeffs: Coeffs, vars: Vars, mut degree: usize) -> Result<Self, Error>
+    where
+        Vars: TryInto<Variables>,
+        Error: From<<Vars as TryInto<Variables>>::Error>,
+    {
+        let mut vars = vars.try_into()?;
+        // Normalize degree and vars.
+        if degree == 0 || vars.is_empty() {
+            degree = 0;
+            vars = Variables::empty();
+        }
+        if coeffs.len() != ncoeffs(vars.len(), degree) {
+            Err(Error::NCoeffsNVarsDegreeMismatch)
+        } else {
+            Ok(Self::new_unchecked(coeffs, vars, degree))
+        }
+    }
+
+    #[inline]
+    fn new_unchecked(coeffs: Coeffs, vars: Variables, degree: usize) -> Self {
+        #[cfg(debug)]
+        if degree == 0 || vars.len() == 0 {
+            assert_eq!(degree, 0);
+            assert_eq!(vars.len(), 0);
+        }
+        Self {
+            coeffs,
+            vars,
+            degree,
+        }
+    }
+
+    #[inline]
+    pub fn zeros(mut vars: Variables, mut degree: usize) -> Self
+    where
+        Coeff: Zero,
+        Coeffs: FromIterator<Coeff>,
+    {
+        // Normalize degree and vars.
+        if degree == 0 || vars.is_empty() {
+            degree = 0;
+            vars = Variables::empty();
+        }
+        let ncoeffs = ncoeffs(vars.len(), degree);
+        let coeffs: Coeffs = iter::repeat_with(|| Coeff::zero()).take(ncoeffs).collect();
+        Self::new_unchecked(coeffs, vars, degree)
+    }
+
+    #[inline]
+    pub fn by_ref(&self) -> &Self {
+        self
+    }
+}
+
+impl<Coeff, Coeffs> Poly for PolySequence<Coeffs>
+where
+    Coeffs: Sequence<Item = Coeff> + IntoIterator<Item = Coeff>,
+{
+    type Coeff = Coeff;
+    type CoeffsIter = Coeffs::IntoIter;
+
+    #[inline]
+    fn vars(&self) -> Variables {
+        self.vars
+    }
+
     #[inline]
     fn degree(&self) -> usize {
         self.degree
     }
 
-    #[inline]
-    fn nvars(&self) -> usize {
-        self.nvars
+    fn coeffs_iter(self) -> Self::CoeffsIter {
+        self.coeffs.into_iter()
     }
 }
 
-impl<Coeff, CoeffsIter> PolyIter<Coeff, CoeffsIter>
+impl<'me, Coeff, Coeffs> Poly for &'me PolySequence<Coeffs>
 where
-    CoeffsIter: Iterator<Item = Coeff>,
+    Coeff: 'me,
+    Coeffs: Sequence<Item = Coeff>,
+    &'me Coeffs: IntoIterator<Item = &'me Coeff>,
 {
-    /// Creates a new [`PolyIter`].
+    type Coeff = &'me Coeff;
+    type CoeffsIter = <&'me Coeffs as IntoIterator>::IntoIter;
+
     #[inline]
-    pub fn new(coeffs_iter: CoeffsIter, degree: usize, nvars: usize) -> Option<Self>
-    where
-        CoeffsIter: ExactSizeIterator,
-    {
-        (coeffs_iter.len() == ncoeffs(degree, nvars)).then(|| Self {
-            coeffs_iter,
-            degree,
-            nvars,
-        })
+    fn vars(&self) -> Variables {
+        self.vars
     }
-    /// Creates a [`PolySequence`] from this polynomial.
+
     #[inline]
-    pub fn collect<Coeffs>(self) -> PolySequence<Coeff, Coeffs>
+    fn degree(&self) -> usize {
+        self.degree
+    }
+
+    fn coeffs_iter(self) -> Self::CoeffsIter {
+        self.coeffs.into_iter()
+    }
+}
+
+pub struct Constant<Coeff>(Coeff);
+
+impl<Coeff> Poly for Constant<Coeff> {
+    type Coeff = Coeff;
+    type CoeffsIter = iter::Once<Coeff>;
+
+    #[inline]
+    fn vars(&self) -> Variables {
+        Variables::empty()
+    }
+
+    #[inline]
+    fn degree(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    fn coeffs_iter(self) -> Self::CoeffsIter {
+        iter::once(self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mul<Lhs, Rhs> {
+    lhs: Lhs,
+    rhs: Rhs,
+}
+
+impl<Lhs, Rhs, Coeff> Poly for Mul<Lhs, Rhs>
+where
+    Lhs: Poly,
+    Rhs: Poly,
+    Rhs::CoeffsIter: Clone,
+    Lhs::Coeff: ops::Mul<Rhs::Coeff, Output = Coeff> + Clone,
+    Coeff: ops::AddAssign + Zero,
+{
+    type Coeff = Coeff;
+    type CoeffsIter = std::vec::IntoIter<Coeff>;
+
+    #[inline]
+    fn vars(&self) -> Variables {
+        self.lhs.vars() | self.rhs.vars()
+    }
+
+    #[inline]
+    fn degree(&self) -> usize {
+        self.lhs.degree() + self.rhs.degree()
+    }
+
+    #[inline]
+    fn coeffs_iter(self) -> Self::CoeffsIter {
+        let mut output: PolySequence<Vec<_>> = PolySequence::zeros(self.vars(), self.degree());
+        self.add_to(&mut output).unwrap();
+        output.coeffs.into_iter()
+    }
+
+    #[inline]
+    fn assign_to<TargetCoeffs>(self, target: &mut PolySequence<TargetCoeffs>) -> Result<(), Error>
     where
-        Coeffs: Sequence<Coeff> + FromIterator<Coeff>,
+        TargetCoeffs: Sequence<Item = Self::Coeff> + MutSequence + IntoIterator<Item = Self::Coeff>,
+        for<'a> &'a mut TargetCoeffs: IntoIterator<Item = &'a mut Self::Coeff>,
     {
-        PolySequence {
-            coeffs: self.coeffs_iter.collect(),
-            degree: self.degree,
-            nvars: self.nvars,
-            phantom: PhantomData,
+        (&mut target.coeffs)
+            .into_iter()
+            .for_each(|t| *t = Self::Coeff::zero());
+        self.add_to(target)
+    }
+
+    fn add_to<TargetCoeff, TargetCoeffs>(
+        self,
+        target: &mut PolySequence<TargetCoeffs>,
+    ) -> Result<(), Error>
+    where
+        TargetCoeff: ops::AddAssign<Self::Coeff>,
+        TargetCoeffs: Sequence<Item = TargetCoeff> + MutSequence + IntoIterator<Item = TargetCoeff>,
+        for<'a> &'a mut TargetCoeffs: IntoIterator<Item = &'a mut TargetCoeff>,
+    {
+        let tvars = target.vars();
+        let tnvars = tvars.len();
+        let tdegree = target.degree();
+        if tdegree < self.degree() {
+            return Err(Error::AssignLowerDegree);
+        } else if !self.vars().is_contained_in(tvars) {
+            return Err(Error::AssignMissingVariables);
+        }
+        let mut tpowers = iter::repeat(0).take(tnvars).collect::<Vec<_>>();
+        let lindices: Vec<_> = self
+            .lhs
+            .vars()
+            .iter()
+            .map(|var| tvars.index(var).unwrap())
+            .collect();
+        let rindices: Vec<_> = self
+            .rhs
+            .vars()
+            .iter()
+            .map(|var| tvars.index(var).unwrap())
+            .collect();
+        let mut lpowers = powers_iter(self.lhs.nvars(), self.lhs.degree());
+        let mut rpowers = powers_iter(self.rhs.nvars(), self.rhs.degree());
+        let mut lcoeffs = self.lhs.coeffs_iter();
+        let rdegree = self.rhs.degree();
+        let rcoeffs = self.rhs.coeffs_iter();
+        while let (Some(lc), Some(lp)) = (lcoeffs.next(), lpowers.next()) {
+            //if lc.borrow().is_zero() {
+            //    continue;
+            //}
+            let mut rcoeffs = rcoeffs.clone();
+            rpowers.reset(rdegree);
+            while let (Some(rc), Some(rp)) = (rcoeffs.next(), rpowers.next()) {
+                tpowers.fill(0);
+                for (i, p) in iter::zip(&lindices, lp.iter()) {
+                    tpowers[*i] += p;
+                }
+                for (i, p) in iter::zip(&rindices, rp.iter()) {
+                    tpowers[*i] += p;
+                }
+                let ti = powers_rev_iter_to_index(tpowers.iter().rev().copied(), tdegree, tnvars)
+                    .unwrap();
+                *target.coeffs.get_mut(ti).unwrap() += lc.clone() * rc;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Add<Lhs, Rhs> {
+    lhs: Lhs,
+    rhs: Rhs,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartialDeriv<P: Poly> {
+    poly: P,
+    var: Variable,
+}
+
+impl<P: Poly> Poly for PartialDeriv<P>
+where
+    P::Coeff: IntegerMultiple,
+    <P::Coeff as IntegerMultiple>::Output: Zero,
+{
+    type Coeff = <P::Coeff as IntegerMultiple>::Output;
+    type CoeffsIter = PartialDerivCoeffsIter<P::CoeffsIter>;
+
+    #[inline]
+    fn vars(&self) -> Variables {
+        if self.poly.degree() <= 1 || !self.poly.vars().get(self.var) {
+            Variables::empty()
+        } else {
+            self.poly.vars()
+        }
+    }
+
+    #[inline]
+    fn degree(&self) -> usize {
+        if self.poly.degree() <= 1 || !self.poly.vars().get(self.var) {
+            0
+        } else {
+            self.poly.degree() - 1
+        }
+    }
+
+    #[inline]
+    fn coeffs_iter(self) -> Self::CoeffsIter {
+        if let Some(index) = self.vars().index(self.var) {
+            // If the degree of `self.poly` is zero, the iterator we return
+            // here will be empty, which violates the requirement of `Poly`:
+            // the number of coefficients for a polynomial of degree zero is
+            // one. However, since the `Poly::vars()` should be empty for a
+            // polynomial of degree zero, this situation cannot occur.
+            PartialDerivCoeffsIter::NonZero(NonZeroPartialDerivCoeffsIter {
+                powers: powers_iter(self.poly.nvars(), self.poly.degree())
+                    .get(index)
+                    .unwrap(),
+                coeffs: self.poly.coeffs_iter(),
+            })
+        } else {
+            PartialDerivCoeffsIter::Zero(iter::once(Self::Coeff::zero()))
         }
     }
 }
 
-impl<'a, Coeff, CoeffsIter> PolyIter<&'a Coeff, CoeffsIter>
+pub enum PartialDerivCoeffsIter<CoeffsIter>
 where
-    CoeffsIter: Iterator<Item = &'a Coeff>,
-    Coeff: 'a + Copy,
+    CoeffsIter: Iterator,
+    CoeffsIter::Item: IntegerMultiple,
+    <CoeffsIter::Item as IntegerMultiple>::Output: Zero,
 {
-    /// Creates a [`PolyIter`] which copies all coefficients.
-    pub fn copied(self) -> PolyIter<Coeff, iter::Copied<CoeffsIter>> {
-        PolyIter {
-            coeffs_iter: self.coeffs_iter.copied(),
-            degree: self.degree,
-            nvars: self.nvars,
+    Zero(iter::Once<<CoeffsIter::Item as IntegerMultiple>::Output>),
+    NonZero(NonZeroPartialDerivCoeffsIter<CoeffsIter>),
+}
+
+impl<CoeffsIter> Iterator for PartialDerivCoeffsIter<CoeffsIter>
+where
+    CoeffsIter: Iterator,
+    CoeffsIter::Item: IntegerMultiple,
+    <CoeffsIter::Item as IntegerMultiple>::Output: Zero,
+{
+    type Item = <CoeffsIter::Item as IntegerMultiple>::Output;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Zero(iter) => iter.next(),
+            Self::NonZero(iter) => iter.next(),
         }
     }
 }
 
-impl<'a, Coeff, CoeffsIter> PolyIter<&'a Coeff, CoeffsIter>
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonZeroPartialDerivCoeffsIter<CoeffsIter> {
+    coeffs: CoeffsIter,
+    powers: NthPowerIter,
+}
+
+impl<CoeffsIter> Iterator for NonZeroPartialDerivCoeffsIter<CoeffsIter>
 where
-    CoeffsIter: Iterator<Item = &'a Coeff>,
-    Coeff: 'a + Clone,
+    CoeffsIter: Iterator,
+    CoeffsIter::Item: IntegerMultiple,
 {
-    /// Creates a [`PolyIter`] which clones all coefficients.
-    pub fn cloned(self) -> PolyIter<Coeff, iter::Cloned<CoeffsIter>> {
-        PolyIter {
-            coeffs_iter: self.coeffs_iter.cloned(),
-            degree: self.degree,
-            nvars: self.nvars,
+    type Item = <CoeffsIter::Item as IntegerMultiple>::Output;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        while let (Some(coeff), Some(power)) = (self.coeffs.next(), self.powers.next()) {
+            if power > 0 {
+                return Some(coeff.integer_multiple(power));
+            }
         }
+        None
     }
 }
 
-// TODO: impl PolyIter::change_degree(self, degree: usize) -> PolyIter
-
-/// Evaluate a polynomial.
-pub trait Eval<Var> {
-    /// Evaluates the polynomial for the given variables.
-    ///
-    /// # Examples
-    ///
-    /// Consider the polynomial `2 - x + x^2` (coefficients: `[1, -1, 2]`).
-    ///
-    /// ```
-    /// use nutils_poly::{PolySequence, Eval as _};
-    ///
-    /// let poly = PolySequence::new([1, -1, 2], 2, 1).unwrap();
-    /// assert_eq!(poly.eval(&[0]), 2); // x = 0
-    /// assert_eq!(poly.eval(&[1]), 2); // x = 1
-    /// assert_eq!(poly.eval(&[2]), 4); // x = 2
-    /// ```
-    fn eval<Vars>(self, vars: &Vars) -> Var
-    where
-        Vars: Sequence<Var> + ?Sized;
-}
-
-impl<Coeff, Coeffs, Var> Eval<Var> for &PolySequence<Coeff, Coeffs>
-where
-    Coeffs: Sequence<Coeff>,
-    Var: Zero + ops::AddAssign,
-    for<'a> Var: ops::MulAssign<&'a Var> + ops::AddAssign<&'a Coeff>,
-{
-    #[inline]
-    fn eval<Vars>(self, vars: &Vars) -> Var
-    where
-        Vars: Sequence<Var> + ?Sized,
-    {
-        self.iter().eval(vars)
-    }
-}
-
-impl<Coeff, Coeffs, Var> Eval<Var> for &PolySlice<Coeff, Coeffs>
-where
-    Coeffs: AsRef<[Coeff]>,
-    Var: Zero + ops::AddAssign,
-    for<'a> Var: ops::MulAssign<&'a Var> + ops::AddAssign<&'a Coeff>,
-{
-    #[inline]
-    fn eval<Vars>(self, vars: &Vars) -> Var
-    where
-        Vars: Sequence<Var> + ?Sized,
-    {
-        self.iter().eval(vars)
-    }
-}
-
-impl<Coeff, Coeffs, Var> Eval<Var> for PolyIter<Coeff, Coeffs>
-where
-    Coeffs: Iterator<Item = Coeff>,
-    Var: Zero + ops::AddAssign + ops::AddAssign<Coeff>,
-    for<'a> Var: ops::MulAssign<&'a Var>,
-{
-    #[inline]
-    fn eval<Vars>(mut self, vars: &Vars) -> Var
-    where
-        Vars: Sequence<Var> + ?Sized,
-    {
-        assert_eq!(vars.len(), self.nvars);
-        DefaultEvalCoeffsIter.eval(&mut self.coeffs_iter, self.degree, &vars)
-    }
-}
-
-trait EvalCoeffsIter<Var, Coeff, Output> {
+trait EvalCoeffsIter<Value, Coeff, Output> {
     fn from_coeff(&self, coeff: Coeff) -> Output;
     fn init_acc(&self) -> Output;
-    fn update_acc_coeff(&self, acc: &mut Output, coeff: Coeff, var: &Var);
-    fn update_acc_inner(&self, acc: &mut Output, inner: Output, var: &Var);
+    fn update_acc_coeff(&self, acc: &mut Output, coeff: Coeff, value: &Value);
+    fn update_acc_inner(&self, acc: &mut Output, inner: Output, value: &Value);
 
     #[inline]
-    fn eval<Coeffs, Vars>(&self, coeffs: &mut Coeffs, degree: usize, vars: &Vars) -> Output
+    fn eval<P, Values>(&self, poly: P, values: &Values) -> Output
+    where
+        P: Poly<Coeff = Coeff>,
+        Values: Sequence<Item = Value> + ?Sized,
+    {
+        assert!(values.len() >= poly.nvars());
+        let degree = poly.degree();
+        self.eval_iter(&mut poly.coeffs_iter(), degree, &values)
+    }
+
+    #[inline]
+    fn eval_iter<Coeffs, Values>(
+        &self,
+        coeffs: &mut Coeffs,
+        degree: usize,
+        values: &Values,
+    ) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Vars: Sequence<Var> + ?Sized,
+        Values: Sequence<Item = Value> + ?Sized,
     {
-        match vars.len() {
+        match values.len() {
             0 => self.eval_0d(coeffs),
-            1 => self.eval_1d(coeffs, degree, vars),
-            2 => self.eval_2d(coeffs, degree, vars),
-            3 => self.eval_3d(coeffs, degree, vars),
-            nvars => self.eval_nd(coeffs, degree, vars, nvars),
+            1 => self.eval_1d(coeffs, degree, values),
+            2 => self.eval_2d(coeffs, degree, values),
+            3 => self.eval_3d(coeffs, degree, values),
+            nvars => self.eval_nd(coeffs, degree, values, nvars),
         }
     }
 
@@ -883,69 +1331,69 @@ trait EvalCoeffsIter<Var, Coeff, Output> {
     }
 
     #[inline]
-    fn eval_1d<Coeffs, Vars>(&self, coeffs: &mut Coeffs, degree: usize, vars: &Vars) -> Output
+    fn eval_1d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Vars: Sequence<Var> + ?Sized,
+        Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let var = vars.get(0).unwrap();
+        let value = values.get(0).unwrap();
         for coeff in coeffs.take(degree + 1) {
-            self.update_acc_coeff(&mut acc, coeff, var);
+            self.update_acc_coeff(&mut acc, coeff, value);
         }
         acc
     }
 
     #[inline]
-    fn eval_2d<Coeffs, Vars>(&self, coeffs: &mut Coeffs, degree: usize, vars: &Vars) -> Output
+    fn eval_2d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Vars: Sequence<Var> + ?Sized,
+        Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let var = vars.get(1).unwrap();
+        let value = values.get(1).unwrap();
         for p in 0..=degree {
-            let inner = self.eval_1d(coeffs, p, vars);
-            self.update_acc_inner(&mut acc, inner, var);
+            let inner = self.eval_1d(coeffs, p, values);
+            self.update_acc_inner(&mut acc, inner, value);
         }
         acc
     }
 
     #[inline]
-    fn eval_3d<Coeffs, Vars>(&self, coeffs: &mut Coeffs, degree: usize, vars: &Vars) -> Output
+    fn eval_3d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Vars: Sequence<Var> + ?Sized,
+        Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let var = vars.get(2).unwrap();
+        let value = values.get(2).unwrap();
         for p in 0..=degree {
-            let inner = self.eval_2d(coeffs, p, vars);
-            self.update_acc_inner(&mut acc, inner, var);
+            let inner = self.eval_2d(coeffs, p, values);
+            self.update_acc_inner(&mut acc, inner, value);
         }
         acc
     }
 
     #[inline]
-    fn eval_nd<Coeffs, Vars>(
+    fn eval_nd<Coeffs, Values>(
         &self,
         coeffs: &mut Coeffs,
         degree: usize,
-        vars: &Vars,
+        values: &Values,
         nvars: usize,
     ) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Vars: Sequence<Var> + ?Sized,
+        Values: Sequence<Item = Value> + ?Sized,
     {
         if nvars == 3 {
-            self.eval_3d(coeffs, degree, vars)
+            self.eval_3d(coeffs, degree, values)
         } else {
             let mut acc = self.init_acc();
-            let var = vars.get(nvars - 1).unwrap();
+            let value = values.get(nvars - 1).unwrap();
             for p in 0..=degree {
-                let inner = self.eval_nd(coeffs, p, vars, nvars - 1);
-                self.update_acc_inner(&mut acc, inner, var);
+                let inner = self.eval_nd(coeffs, p, values, nvars - 1);
+                self.update_acc_inner(&mut acc, inner, value);
             }
             acc
         }
@@ -954,506 +1402,109 @@ trait EvalCoeffsIter<Var, Coeff, Output> {
 
 struct DefaultEvalCoeffsIter;
 
-impl<Var, Coeff> EvalCoeffsIter<Var, Coeff, Var> for DefaultEvalCoeffsIter
+impl<Value, Coeff> EvalCoeffsIter<Value, Coeff, Value> for DefaultEvalCoeffsIter
 where
-    Var: Zero + ops::AddAssign + ops::AddAssign<Coeff>,
-    for<'v> Var: ops::MulAssign<&'v Var>,
+    Value: Zero + ops::AddAssign + ops::AddAssign<Coeff>,
+    for<'v> Value: ops::MulAssign<&'v Value>,
 {
     #[inline]
-    fn from_coeff(&self, coeff: Coeff) -> Var {
-        let mut acc = Var::zero();
+    fn from_coeff(&self, coeff: Coeff) -> Value {
+        let mut acc = Value::zero();
         acc += coeff;
         acc
     }
     #[inline]
-    fn init_acc(&self) -> Var {
-        Var::zero()
+    fn init_acc(&self) -> Value {
+        Value::zero()
     }
     #[inline]
-    fn update_acc_coeff(&self, acc: &mut Var, coeff: Coeff, var: &Var) {
-        *acc *= var;
+    fn update_acc_coeff(&self, acc: &mut Value, coeff: Coeff, value: &Value) {
+        *acc *= value;
         *acc += coeff;
     }
     #[inline]
-    fn update_acc_inner(&self, acc: &mut Var, inner: Var, var: &Var) {
-        *acc *= var;
+    fn update_acc_inner(&self, acc: &mut Value, inner: Value, value: &Value) {
+        *acc *= value;
         *acc += inner;
     }
 }
 
-/// The partial derivative of a polynomial.
-pub trait PartialDeriv<Coeff>: Sized {
-    type CoeffsIter: Iterator<Item = Coeff>;
+struct EvalCompositionCoeffsIter;
 
-    /// Returns the partial derivative of a polynomial to the given variable as [`PolyIter`].
-    ///
-    /// If the index of the variable is out of range, returns `None`.
-    fn partial_deriv_iter(self, ivar: usize) -> Option<PolyIter<Coeff, Self::CoeffsIter>>;
-
-    /// Returns the partial derivative of a polynomial to the given variable as [`PolySequence`].
-    ///
-    /// If the index of the variable is out of range, returns `None`.
-    ///
-    /// # Examples
-    ///
-    /// The derivative of polynomial `2 - x + x^2` (coefficients: `[1, -1, 2]`) is
-    /// `-1 + 2 * x` (coefficients: `[2, -1]`):
-    ///
-    /// ```
-    /// use nutils_poly::{PartialDeriv as _, PolySequence};
-    /// assert_eq!(
-    ///     PolySequence::new([1, -1, 2], 2, 1).unwrap().partial_deriv(0),
-    ///     Some(PolySequence::new(vec![2, -1], 1, 1).unwrap()));
-    /// ```
-    #[inline]
-    fn partial_deriv<Coeffs>(self, ivar: usize) -> Option<PolySequence<Coeff, Coeffs>>
-    where
-        Coeffs: Sequence<Coeff> + iter::FromIterator<Coeff>,
-    {
-        self.partial_deriv_iter(ivar).map(|pditer| pditer.collect())
-    }
-}
-
-impl<'this, Coeff, Coeffs, OutCoeff> PartialDeriv<OutCoeff> for &'this PolySequence<Coeff, Coeffs>
+impl<Value, Coeff, OCoeff, OCoeffs> EvalCoeffsIter<Value, Coeff, PolySequence<OCoeffs>>
+    for EvalCompositionCoeffsIter
 where
-    Coeffs: Sequence<Coeff>,
-    OutCoeff: FromPrimitive,
-    for<'a> OutCoeff: ops::Mul<&'a Coeff, Output = OutCoeff>,
-{
-    type CoeffsIter =
-        <PolySequenceIter<'this, Coeff, Coeffs> as PartialDeriv<OutCoeff>>::CoeffsIter;
-
-    #[inline]
-    fn partial_deriv_iter(self, ivar: usize) -> Option<PolyIter<OutCoeff, Self::CoeffsIter>> {
-        self.iter().partial_deriv_iter(ivar)
-    }
-}
-
-impl<'this, Coeff, Coeffs, OutCoeff> PartialDeriv<OutCoeff> for &'this PolySlice<Coeff, Coeffs>
-where
-    Coeffs: AsRef<[Coeff]>,
-    OutCoeff: FromPrimitive,
-    for<'a> OutCoeff: ops::Mul<&'a Coeff, Output = OutCoeff>,
-{
-    type CoeffsIter = <PolySliceIter<'this, Coeff> as PartialDeriv<OutCoeff>>::CoeffsIter;
-
-    #[inline]
-    fn partial_deriv_iter(self, ivar: usize) -> Option<PolyIter<OutCoeff, Self::CoeffsIter>> {
-        self.iter().partial_deriv_iter(ivar)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PartialDerivCoeffsIter<Coeff, CoeffsIter, OutCoeff>
-where
-    CoeffsIter: Iterator<Item = Coeff>,
-    OutCoeff: ops::Mul<Coeff, Output = OutCoeff> + FromPrimitive,
-{
-    coeffs_iter: CoeffsIter,
-    powers_iter: NthPowerIter,
-    is_constant: bool,
-    phantom: PhantomData<OutCoeff>,
-}
-
-impl<Coeff, CoeffsIter, OutCoeff> Iterator for PartialDerivCoeffsIter<Coeff, CoeffsIter, OutCoeff>
-where
-    CoeffsIter: Iterator<Item = Coeff>,
-    OutCoeff: ops::Mul<Coeff, Output = OutCoeff> + FromPrimitive,
-{
-    type Item = OutCoeff;
-
-    #[inline]
-    fn next(&mut self) -> Option<OutCoeff> {
-        while let Some(coeff) = self.coeffs_iter.next() {
-            let power = self.powers_iter.next().unwrap();
-            if power > 0 || self.is_constant {
-                return Some(OutCoeff::from_usize(power).unwrap() * coeff);
-            }
-        }
-        None
-    }
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.coeffs_iter.size_hint()
-    }
-}
-
-impl<Coeff, CoeffsIter, OutCoeff> ExactSizeIterator
-    for PartialDerivCoeffsIter<Coeff, CoeffsIter, OutCoeff>
-where
-    CoeffsIter: Iterator<Item = Coeff> + ExactSizeIterator,
-    OutCoeff: ops::Mul<Coeff, Output = OutCoeff> + FromPrimitive,
-{
-}
-
-impl<Coeff, CoeffsIter, OutCoeff> PartialDeriv<OutCoeff> for PolyIter<Coeff, CoeffsIter>
-where
-    CoeffsIter: Iterator<Item = Coeff>,
-    OutCoeff: ops::Mul<Coeff, Output = OutCoeff> + FromPrimitive,
-{
-    type CoeffsIter = PartialDerivCoeffsIter<Coeff, CoeffsIter, OutCoeff>;
-
-    #[inline]
-    fn partial_deriv_iter(self, ivar: usize) -> Option<PolyIter<OutCoeff, Self::CoeffsIter>> {
-        Some(PolyIter {
-            coeffs_iter: PartialDerivCoeffsIter {
-                coeffs_iter: self.coeffs_iter,
-                powers_iter: powers_iter(self.degree, self.nvars).get(ivar)?,
-                is_constant: self.degree == 0 || self.nvars == 0,
-                phantom: PhantomData,
-            },
-            degree: self.degree.checked_sub(1).unwrap_or(0),
-            nvars: self.nvars,
-        })
-    }
-}
-
-/// Multiply two polynomials.
-pub trait Mul<LCoeff, RCoeff, RCoeffsIter, OCoeff>
-where
-    Self: Sized + Dimensions,
-    for<'a> &'a LCoeff: ops::Mul<RCoeff, Output = OCoeff>,
-    RCoeff: Clone,
-    RCoeffsIter: Iterator<Item = RCoeff> + Clone,
-    OCoeff: Zero + ops::AddAssign,
-{
-    #[must_use]
-    fn mul_same_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>;
-
-    #[inline]
-    fn mul_same_vars<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-    ) -> Result<PolySequence<OCoeff, OCoeffs>, Error>
-    where
-        OCoeffs: Sequence<OCoeff> + MutSequence<OCoeff> + iter::FromIterator<OCoeff>,
-    {
-        let odegree = self.degree() + rpoly.degree();
-        let mut opoly = PolySequence::new(
-            iter::repeat_with(|| OCoeff::zero())
-                .take(ncoeffs(odegree, self.nvars()))
-                .collect(),
-            odegree,
-            self.nvars(),
-        )
-        .unwrap();
-        self.mul_same_vars_into(rpoly, &mut opoly)?;
-        Ok(opoly)
-    }
-
-    #[must_use]
-    fn mul_different_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>;
-
-    #[inline]
-    fn mul_different_vars<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-    ) -> Result<PolySequence<OCoeff, OCoeffs>, Error>
-    where
-        OCoeffs: Sequence<OCoeff> + MutSequence<OCoeff> + iter::FromIterator<OCoeff>,
-    {
-        let odegree = self.degree() + rpoly.degree();
-        let onvars = self.nvars() + rpoly.nvars();
-        let mut opoly = PolySequence::new(
-            iter::repeat_with(|| OCoeff::zero())
-                .take(ncoeffs(odegree, onvars))
-                .collect(),
-            odegree,
-            onvars,
-        )
-        .unwrap();
-        self.mul_different_vars_into(rpoly, &mut opoly)?;
-        Ok(opoly)
-    }
-}
-
-impl<LCoeff, LCoeffsIter, RCoeff, RCoeffsIter, OCoeff> Mul<LCoeff, RCoeff, RCoeffsIter, OCoeff>
-    for PolyIter<LCoeff, LCoeffsIter>
-where
-    for<'a> &'a LCoeff: ops::Mul<RCoeff, Output = OCoeff>,
-    LCoeffsIter: Iterator<Item = LCoeff>,
-    RCoeff: Clone,
-    RCoeffsIter: Iterator<Item = RCoeff> + Clone,
-    OCoeff: Zero + ops::AddAssign,
-{
-    fn mul_same_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        let onvars = opoly.nvars();
-        if onvars != self.nvars() || onvars != rpoly.nvars() {
-            return Err(Error::AssignDifferentNumberOfVariables);
-        }
-        let odegree = opoly.degree();
-        if odegree < self.degree() + rpoly.degree() {
-            return Err(Error::AssignLowerDegree);
-        }
-        for ocoeff in opoly.coeffs.iter_mut() {
-            *ocoeff = OCoeff::zero();
-        }
-        let mut lpowers = powers_iter(self.degree(), onvars);
-        let mut rpowers = powers_iter(rpoly.degree(), onvars);
-        let mut lcoeffs = self.coeffs_iter;
-        while let (Some(lc), Some(lp)) = (lcoeffs.next(), lpowers.next()) {
-            //if lc.is_zero() {
-            //    continue;
-            //}
-            let mut rcoeffs = rpoly.clone().coeffs_iter;
-            rpowers.reset(rpoly.degree());
-            while let (Some(rc), Some(rp)) = (rcoeffs.next(), rpowers.next()) {
-                //if rc.is_zero() {
-                //    continue;
-                //}
-                let op = iter::zip(lp.iter().rev(), rp.iter().rev()).map(|(lj, rj)| lj + rj);
-                let oi = powers_rev_iter_to_index(op, odegree, onvars).unwrap();
-                *opoly.coeffs.get_mut(oi).unwrap() += &lc * rc;
-            }
-        }
-        Ok(())
-    }
-
-    fn mul_different_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        let onvars = opoly.nvars();
-        if onvars != self.nvars() + rpoly.nvars() {
-            return Err(Error::AssignDifferentNumberOfVariables);
-        }
-        let odegree = opoly.degree();
-        if odegree < self.degree() + rpoly.degree() {
-            return Err(Error::AssignLowerDegree);
-        }
-        for ocoeff in opoly.coeffs.iter_mut() {
-            *ocoeff = OCoeff::zero();
-        }
-        let mut lpowers = powers_iter(self.degree(), self.nvars());
-        let mut rpowers = powers_iter(rpoly.degree(), rpoly.nvars());
-        let mut lcoeffs = self.coeffs_iter;
-        while let (Some(lc), Some(lp)) = (lcoeffs.next(), lpowers.next()) {
-            //if lc.is_zero() {
-            //    continue;
-            //}
-            let mut rcoeffs = rpoly.clone().coeffs_iter;
-            rpowers.reset(rpoly.degree());
-            while let (Some(rc), Some(rp)) = (rcoeffs.next(), rpowers.next()) {
-                //if rc.is_zero() {
-                //    continue;
-                //}
-                let op = rp.iter().rev().chain(lp.iter().rev()).copied();
-                let oi = powers_rev_iter_to_index(op, odegree, onvars).unwrap();
-                *opoly.coeffs.get_mut(oi).unwrap() += &lc * rc;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<'this, LCoeff, LCoeffsIter, RCoeff, RCoeffsIter, OCoeff>
-    Mul<LCoeff, RCoeff, RCoeffsIter, OCoeff> for PolyIter<&'this LCoeff, LCoeffsIter>
-where
-    for<'a> &'a LCoeff: ops::Mul<RCoeff, Output = OCoeff>,
-    LCoeffsIter: Iterator<Item = &'this LCoeff>,
-    RCoeff: Clone,
-    RCoeffsIter: Iterator<Item = RCoeff> + Clone,
-    OCoeff: Zero + ops::AddAssign,
-{
-    fn mul_same_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        let onvars = opoly.nvars();
-        if onvars != self.nvars() || onvars != rpoly.nvars() {
-            return Err(Error::AssignDifferentNumberOfVariables);
-        }
-        let odegree = opoly.degree();
-        if odegree < self.degree() + rpoly.degree() {
-            return Err(Error::AssignLowerDegree);
-        }
-        for ocoeff in opoly.coeffs.iter_mut() {
-            *ocoeff = OCoeff::zero();
-        }
-        let mut lpowers = powers_iter(self.degree(), onvars);
-        let mut rpowers = powers_iter(rpoly.degree(), onvars);
-        let mut lcoeffs = self.coeffs_iter;
-        while let (Some(lc), Some(lp)) = (lcoeffs.next(), lpowers.next()) {
-            //if lc.is_zero() {
-            //    continue;
-            //}
-            let mut rcoeffs = rpoly.clone().coeffs_iter;
-            rpowers.reset(rpoly.degree());
-            while let (Some(rc), Some(rp)) = (rcoeffs.next(), rpowers.next()) {
-                //if rc.is_zero() {
-                //    continue;
-                //}
-                let op = iter::zip(lp.iter().rev(), rp.iter().rev()).map(|(lj, rj)| lj + rj);
-                let oi = powers_rev_iter_to_index(op, odegree, onvars).unwrap();
-                *opoly.coeffs.get_mut(oi).unwrap() += lc * rc;
-            }
-        }
-        Ok(())
-    }
-
-    fn mul_different_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        let onvars = opoly.nvars();
-        if onvars != self.nvars() + rpoly.nvars() {
-            return Err(Error::AssignDifferentNumberOfVariables);
-        }
-        let odegree = opoly.degree();
-        if odegree < self.degree() + rpoly.degree() {
-            return Err(Error::AssignLowerDegree);
-        }
-        for ocoeff in opoly.coeffs.iter_mut() {
-            *ocoeff = OCoeff::zero();
-        }
-        let mut lpowers = powers_iter(self.degree(), self.nvars());
-        let mut rpowers = powers_iter(rpoly.degree(), rpoly.nvars());
-        let mut lcoeffs = self.coeffs_iter;
-        while let (Some(lc), Some(lp)) = (lcoeffs.next(), lpowers.next()) {
-            //if lc.is_zero() {
-            //    continue;
-            //}
-            let mut rcoeffs = rpoly.clone().coeffs_iter;
-            rpowers.reset(rpoly.degree());
-            while let (Some(rc), Some(rp)) = (rcoeffs.next(), rpowers.next()) {
-                //if rc.is_zero() {
-                //    continue;
-                //}
-                let op = rp.iter().rev().chain(lp.iter().rev()).copied();
-                let oi = powers_rev_iter_to_index(op, odegree, onvars).unwrap();
-                *opoly.coeffs.get_mut(oi).unwrap() += lc * rc;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<'this, LCoeff, LCoeffs, RCoeff, RCoeffsIter, OCoeff> Mul<LCoeff, RCoeff, RCoeffsIter, OCoeff>
-    for &'this PolySequence<LCoeff, LCoeffs>
-where
-    for<'a> &'a LCoeff: ops::Mul<RCoeff, Output = OCoeff>,
-    LCoeffs: Sequence<LCoeff>,
-    RCoeff: Clone,
-    RCoeffsIter: Iterator<Item = RCoeff> + Clone,
-    OCoeff: Zero + ops::AddAssign,
+    for<'a> &'a Value: Poly,
+    for<'a> <&'a Value as Poly>::CoeffsIter: Clone,
+    OCoeff: Zero
+        + ops::AddAssign
+        + for<'a> ops::AddAssign<&'a OCoeff>
+        + ops::AddAssign<Coeff>
+        + for<'a> ops::AddAssign<<&'a Value as Poly>::Coeff>
+        + for<'a> ops::Mul<<&'a Value as Poly>::Coeff, Output = OCoeff>
+        + Clone,
+    OCoeffs:
+        Sequence<Item = OCoeff> + MutSequence + IntoIterator<Item = OCoeff> + FromIterator<OCoeff>,
+    for<'a> &'a mut OCoeffs: IntoIterator<Item = &'a mut OCoeff>,
+    for<'a> &'a OCoeffs: IntoIterator<Item = &'a OCoeff>,
 {
     #[inline]
-    fn mul_same_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        self.iter().mul_same_vars_into(rpoly, opoly)
+    fn from_coeff(&self, coeff: Coeff) -> PolySequence<OCoeffs> {
+        let mut acc: PolySequence<OCoeffs> = PolySequence::zeros(Variables::empty(), 0);
+        *acc.coeffs.last_mut().unwrap() += coeff;
+        acc
     }
-
     #[inline]
-    fn mul_different_vars_into<OCoeffs>(
-        self,
-        rpoly: PolyIter<RCoeff, RCoeffsIter>,
-        opoly: &mut PolySequence<OCoeff, OCoeffs>,
-    ) -> Result<(), Error>
-    where
-        OCoeffs: MutSequence<OCoeff>,
-    {
-        self.iter().mul_different_vars_into(rpoly, opoly)
+    fn init_acc(&self) -> PolySequence<OCoeffs> {
+        PolySequence::zeros(Variables::empty(), 0)
+    }
+    #[inline]
+    fn update_acc_coeff(&self, acc: &mut PolySequence<OCoeffs>, coeff: Coeff, value: &Value) {
+        if acc.degree() == 0 && acc.coeffs.get(0).unwrap().is_zero() {
+            *acc.coeffs.last_mut().unwrap() += coeff;
+        } else {
+            let mut old_acc =
+                PolySequence::zeros(acc.vars() | value.vars(), acc.degree() + value.degree());
+            std::mem::swap(acc, &mut old_acc);
+            old_acc.mul(value).add_to(acc).unwrap();
+            *acc.coeffs.last_mut().unwrap() += coeff;
+        }
+    }
+    #[inline]
+    fn update_acc_inner(
+        &self,
+        acc: &mut PolySequence<OCoeffs>,
+        mut inner: PolySequence<OCoeffs>,
+        value: &Value,
+    ) {
+        if acc.degree() == 0 && acc.coeffs.get(0).unwrap().is_zero() {
+            std::mem::swap(acc, &mut inner)
+        } else {
+            let mut old_acc = PolySequence::zeros(
+                acc.vars() | inner.vars() | value.vars(),
+                std::cmp::max(acc.degree() + value.degree(), inner.degree()),
+            );
+            std::mem::swap(acc, &mut old_acc);
+            old_acc.mul(value).add_to(acc).unwrap();
+            inner.add_to(acc).unwrap();
+        }
     }
 }
-//
-//pub fn composition(outer: PolyIter, inner: &Inner) -> PolySequence
-//where
-//    Inner: Sequence<PolySequence<InnerCoeff12
-//{
-//    EvalCompositionCoeffsIter.eval(&mut outer.coeffs_iter, outer.degree, &inner)
-//}
-//
-//struct EvalCompositionCoeffsIter {}
-//
-//impl EvalCoeffsIter<InnerPoly, OuterCoeff, OutPoly> for EvalCompositionCoeffsIter {
-//    fn from_coeff(&self, coeff: OuterCoeff) -> OutPoly {
-//        OutPoly::new(iter::once(coeff).collect(), 0, 0)
-//    }
-//    fn init_acc(&self) -> OutPoly {
-//        OutPoly::new(iter::once(OutCoeff::zero()), 0, 0)
-//    }
-//    fn update_acc_coeff(&self, acc: &mut OutPoly, coeff: OuterCoeff, var: &InnerPoly) {
-//        *acc = acc.mul_different_vars(var);
-//        acc += coeff;
-//    }
-//    fn update_acc_inner(&self, acc: &mut OutPoly, inner: OutPoly, var: &InnerPoly) {
-//        *acc = acc.mul_different_vars(var);
-//        acc += inner;
-//    }
-//}
 
-///// Returns the power of a polynomial to a non-negative integer.
-//pub fn pow(coeffs: &[f64], degree: usize, nvars: usize, exp: usize) -> Vec<f64> {
-//    if exp == 0 {
-//        vec![1.0]
-//    } else if exp == 1 {
-//        coeffs.to_vec()
-//    } else {
-//        let sqr = mul(coeffs, coeffs, degree, degree, nvars);
-//        if exp == 2 {
-//            sqr
-//        } else {
-//            let even = pow(&sqr, degree * 2, nvars, exp / 2);
-//            if exp % 2 == 0 {
-//                even
-//            } else {
-//                mul(&even, coeffs, degree * 2 * (exp / 2), degree, nvars)
-//            }
-//        }
-//    }
-//}
-
-///// Returns a transformation matrix.
-/////
-///// The matrix is such that the following two expressions are equivalent:
-/////
-///// ```text
-///// eval(coeffs, eval(transform_coeffs, vars, transform_degree, from_nvars), degree, to_nvars)
-///// eval(matvec(matrix, coeffs), vars, transform_degree * degree, from_nvars)
-///// ```
-/////
-///// where `matrix` is the result of
-/////
-///// ```text
-///// transform_matrix(transform_coeffs, transform_degree, from_nvars, degree, to_nvars)
-///// ```
+/// Returns a transformation matrix.
+///
+/// The matrix is such that the following two expressions are equivalent:
+///
+/// ```text
+/// eval(coeffs, eval(transform_coeffs, vars, transform_degree, from_nvars), degree, to_nvars)
+/// eval(matvec(matrix, coeffs), vars, transform_degree * degree, from_nvars)
+/// ```
+///
+/// where `matrix` is the result of
+///
+/// ```text
+/// transform_matrix(transform_coeffs, transform_degree, from_nvars, degree, to_nvars)
+/// ```
 //pub fn transform_matrix(
 //    transform_coeffs: &[f64],
 //    transform_degree: usize,
@@ -1461,77 +1512,109 @@ where
 //    degree: usize,
 //    to_nvars: usize,
 //) -> Vec<f64> {
-//    let transform_ncoeffs = ncoeffs(transform_degree, from_nvars);
+//    let transform_ncoeffs = ncoeffs(from_nvars, transform_degree);
 //    assert_eq!(transform_coeffs.len(), to_nvars * transform_ncoeffs);
 //    let row_degree = transform_degree * degree;
-//    let nrows = ncoeffs(transform_degree * degree, from_nvars);
-//    let ncols = ncoeffs(degree, to_nvars);
-//    let mut matrix = uniform_vec(0.0, nrows * ncols);
-//    let mut col_iter = (0..).into_iter();
-//    let mut col_powers = powers_iter(degree, to_nvars);
-//    let mut row_powers = powers_iter(degree, from_nvars);
-//    while let (Some(col), Some(col_powers)) = (col_iter.next(), col_powers.next()) {
-//        let (col_coeffs, col_degree) = iter::zip(
-//            transform_coeffs.chunks_exact(transform_ncoeffs),
-//            col_powers.iter().copied(),
-//        )
-//        .fold(
-//            (vec![1.0], 0),
-//            |(col_coeffs, col_degree), (t_coeffs, power)| {
-//                (
-//                    mul(
-//                        &col_coeffs,
-//                        &pow(t_coeffs, transform_degree, from_nvars, power),
-//                        col_degree,
-//                        transform_degree * power,
-//                        from_nvars,
-//                    ),
-//                    col_degree + transform_degree * power,
-//                )
-//            },
-//        );
-//        let mut col_coeffs = col_coeffs.into_iter();
-//        row_powers.reset(col_degree);
-//        while let (Some(coeff), Some(powers)) = (col_coeffs.next(), row_powers.next()) {
-//            let row =
-//                powers_rev_iter_to_index(powers.iter().rev().copied(), row_degree, from_nvars)
-//                    .unwrap();
-//            matrix[row * ncols + col] = coeff;
-//        }
+//
+//    let inner_vars = (0..from_nvars).try_into().unwrap();
+//    let outer_vars = (0..to_nvars).try_into().unwrap();
+//    let transform_polys: Vec<_> = transform_coeffs
+//        .chunks_exact(transform_ncoeffs)
+//        .map(|c| PolySequence::new_unchecked(c, inner_vars, transform_degree))
+//        .collect();
+//
+//    let nrows = ncoeffs(from_nvars, row_degree);
+//    let ncols = ncoeffs(to_nvars, degree);
+//    let mut matrix: Vec<f64> = Vec::new();
+//    matrix.resize(0.0, nrows * ncols);
+//
+//    for (i, col) in matrix.chunks_exact_mut(nrows).enumerate() {
+//        let mut col: PolySequence<&Vec<f64>> = PolySequence::new_unchecked(col, inner_vars, row_degree);
+//        let mut outer = Poly::zeros(outer_vars, degree);
+//        *outer.coeffs.get_mut(i).unwrap() = 1.0;
+//        EvalCompositionCoeffsIter
+//            .eval(outer, transform_polys)
+//            .assign_to(&mut col);
 //    }
+//
 //    matrix
+//
+//    //while let (Some(col), Some(col_powers)) = (col_iter.next(), col_powers.next()) {
+//    //    let (col_coeffs, col_degree) = iter::zip(
+//    //        transform_coeffs.chunks_exact(transform_ncoeffs),
+//    //        col_powers.iter().copied(),
+//    //    )
+//    //    .fold(
+//    //        (vec![1.0], 0),
+//    //        |(col_coeffs, col_degree), (t_coeffs, power)| {
+//    //            (
+//    //                mul(
+//    //                    &col_coeffs,
+//    //                    &pow(t_coeffs, transform_degree, from_nvars, power),
+//    //                    col_degree,
+//    //                    transform_degree * power,
+//    //                    from_nvars,
+//    //                ),
+//    //                col_degree + transform_degree * power,
+//    //            )
+//    //        },
+//    //    );
+//    //    let mut col_coeffs = col_coeffs.into_iter();
+//    //    row_powers.reset(col_degree);
+//    //    while let (Some(coeff), Some(powers)) = (col_coeffs.next(), row_powers.next()) {
+//    //        let row =
+//    //            powers_rev_iter_to_index(powers.iter().rev().copied(), row_degree, from_nvars)
+//    //                .unwrap();
+//    //        matrix[row * ncols + col] = coeff;
+//    //    }
+//    //}
+//    //matrix
 //}
 
 #[cfg(test)]
 mod tests {
-    use super::{Eval, Mul, PartialDeriv, PolySequence};
+    use super::{
+        EvalCoeffsIter, EvalCompositionCoeffsIter, Poly, PolySequence, Variable, Variables,
+    };
 
     #[test]
     fn ncoeffs() {
         assert_eq!(super::ncoeffs(0, 0), 1);
-        assert_eq!(super::ncoeffs(1, 0), 1);
         assert_eq!(super::ncoeffs(0, 1), 1);
+        assert_eq!(super::ncoeffs(1, 0), 1);
         assert_eq!(super::ncoeffs(1, 1), 2);
-        assert_eq!(super::ncoeffs(2, 1), 3);
-        assert_eq!(super::ncoeffs(0, 2), 1);
         assert_eq!(super::ncoeffs(1, 2), 3);
+        assert_eq!(super::ncoeffs(2, 0), 1);
+        assert_eq!(super::ncoeffs(2, 1), 3);
         assert_eq!(super::ncoeffs(2, 2), 6);
-        assert_eq!(super::ncoeffs(3, 2), 10);
-        assert_eq!(super::ncoeffs(0, 3), 1);
-        assert_eq!(super::ncoeffs(1, 3), 4);
         assert_eq!(super::ncoeffs(2, 3), 10);
+        assert_eq!(super::ncoeffs(3, 0), 1);
+        assert_eq!(super::ncoeffs(3, 1), 4);
+        assert_eq!(super::ncoeffs(3, 2), 10);
         assert_eq!(super::ncoeffs(3, 3), 20);
+    }
+
+    #[test]
+    fn variables_index() {
+        let vars = Variables::try_from([2, 4, 5]).unwrap();
+        assert_eq!(vars.index(Variable::try_from(0).unwrap()), None);
+        assert_eq!(vars.index(Variable::try_from(1).unwrap()), None);
+        assert_eq!(vars.index(Variable::try_from(2).unwrap()), Some(0));
+        assert_eq!(vars.index(Variable::try_from(3).unwrap()), None);
+        assert_eq!(vars.index(Variable::try_from(4).unwrap()), Some(1));
+        assert_eq!(vars.index(Variable::try_from(5).unwrap()), Some(2));
+        assert_eq!(vars.index(Variable::try_from(6).unwrap()), None);
     }
 
     #[test]
     fn powers_to_index_to_powers() {
         macro_rules! assert_index_powers {
             ($degree:literal, $powers:tt) => {
-                let mut powers_iter = super::powers_iter($degree, $powers[0].len());
+                let mut powers_iter = super::powers_iter($powers[0].len(), $degree);
                 for (index, powers) in $powers.iter().enumerate() {
                     // index_to_powers
                     assert_eq!(
-                        super::index_to_powers(index, $degree, powers.len()),
+                        super::index_to_powers(index, powers.len(), $degree),
                         Some(powers.to_vec()),
                     );
                     // powers_to_index
@@ -1574,30 +1657,44 @@ mod tests {
     #[test]
     fn eval_0d() {
         assert_eq!(
-            PolySequence::new([1], 0, 0).unwrap().eval(&[] as &[usize]),
+            PolySequence::new([1], 0..0, 0)
+                .unwrap()
+                .eval(&[] as &[usize]),
             1
         );
     }
 
     #[test]
     fn eval_1d() {
-        assert_eq!(PolySequence::new([1], 0, 1).unwrap().eval(&[5]), 1);
-        assert_eq!(PolySequence::new([2, 1], 1, 1).unwrap().eval(&[5]), 11);
-        assert_eq!(PolySequence::new([3, 2, 1], 2, 1).unwrap().eval(&[5]), 86);
+        assert_eq!(PolySequence::new([1], 0..1, 0).unwrap().eval(&[5]), 1);
+        assert_eq!(PolySequence::new([2, 1], 0..1, 1).unwrap().eval(&[5]), 11);
+        assert_eq!(
+            PolySequence::new([3, 2, 1], 0..1, 2).unwrap().eval(&[5]),
+            86
+        );
     }
 
     #[test]
     fn eval_2d() {
-        assert_eq!(PolySequence::new([1], 0, 2).unwrap().eval(&[5, 3]), 1);
-        assert_eq!(PolySequence::new([0, 0, 1], 1, 2).unwrap().eval(&[5, 3]), 1);
-        assert_eq!(PolySequence::new([0, 1, 0], 1, 2).unwrap().eval(&[5, 3]), 5);
-        assert_eq!(PolySequence::new([1, 0, 0], 1, 2).unwrap().eval(&[5, 3]), 3);
+        assert_eq!(PolySequence::new([1], 0..2, 0).unwrap().eval(&[5, 3]), 1);
         assert_eq!(
-            PolySequence::new([3, 2, 1], 1, 2).unwrap().eval(&[5, 3]),
+            PolySequence::new([0, 0, 1], 0..2, 1).unwrap().eval(&[5, 3]),
+            1
+        );
+        assert_eq!(
+            PolySequence::new([0, 1, 0], 0..2, 1).unwrap().eval(&[5, 3]),
+            5
+        );
+        assert_eq!(
+            PolySequence::new([1, 0, 0], 0..2, 1).unwrap().eval(&[5, 3]),
+            3
+        );
+        assert_eq!(
+            PolySequence::new([3, 2, 1], 0..2, 1).unwrap().eval(&[5, 3]),
             20
         );
         assert_eq!(
-            PolySequence::new([6, 5, 4, 3, 2, 1], 2, 2)
+            PolySequence::new([6, 5, 4, 3, 2, 1], 0..2, 2)
                 .unwrap()
                 .eval(&[5, 3]),
             227
@@ -1606,39 +1703,39 @@ mod tests {
 
     #[test]
     fn eval_3d() {
-        assert_eq!(PolySequence::new([1], 0, 3).unwrap().eval(&[5, 3, 2]), 1);
+        assert_eq!(PolySequence::new([1], 0..3, 0).unwrap().eval(&[5, 3, 2]), 1);
         assert_eq!(
-            PolySequence::new([0, 0, 0, 1], 1, 3)
+            PolySequence::new([0, 0, 0, 1], 0..3, 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             1
         );
         assert_eq!(
-            PolySequence::new([0, 0, 1, 0], 1, 3)
+            PolySequence::new([0, 0, 1, 0], 0..3, 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             5
         );
         assert_eq!(
-            PolySequence::new([0, 1, 0, 0], 1, 3)
+            PolySequence::new([0, 1, 0, 0], 0..3, 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             3
         );
         assert_eq!(
-            PolySequence::new([1, 0, 0, 0], 1, 3)
+            PolySequence::new([1, 0, 0, 0], 0..3, 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             2
         );
         assert_eq!(
-            PolySequence::new([4, 3, 2, 1], 1, 3)
+            PolySequence::new([4, 3, 2, 1], 0..3, 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             28
         );
         assert_eq!(
-            PolySequence::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], 2, 3)
+            PolySequence::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], 0..3, 2)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             415,
@@ -1647,142 +1744,168 @@ mod tests {
 
     #[test]
     fn partial_deriv() {
+        let x0 = Variable::try_from(0).unwrap();
+        let x1 = Variable::try_from(1).unwrap();
         assert_eq!(
-            PolySequence::new([1], 0, 1).unwrap().partial_deriv(0),
-            Some(PolySequence::new(vec![0], 0, 1).unwrap()),
+            PolySequence::new([1], 0..1, 0)
+                .unwrap()
+                .partial_deriv(x0)
+                .collect(),
+            PolySequence::new(vec![0], 0..1, 0).unwrap(),
         );
         assert_eq!(
-            PolySequence::new([4, 3, 2, 1], 3, 1)
+            PolySequence::new([4, 3, 2, 1], 0..1, 3)
                 .unwrap()
-                .partial_deriv(0),
-            Some(PolySequence::new(vec![12, 6, 2], 2, 1).unwrap()),
+                .partial_deriv(x0)
+                .collect(),
+            PolySequence::new(vec![12, 6, 2], 0..1, 2).unwrap(),
         );
         assert_eq!(
-            PolySequence::new([6, 5, 4, 3, 2, 1], 2, 2)
+            PolySequence::new([6, 5, 4, 3, 2, 1], 0..2, 2)
                 .unwrap()
-                .partial_deriv(0),
-            Some(PolySequence::new(vec![5, 6, 2], 1, 2).unwrap()),
+                .partial_deriv(x0)
+                .collect(),
+            PolySequence::new(vec![5, 6, 2], 0..2, 1).unwrap(),
         );
         assert_eq!(
-            PolySequence::new([6, 5, 4, 3, 2, 1], 2, 2)
+            PolySequence::new([6, 5, 4, 3, 2, 1], 0..2, 2)
                 .unwrap()
-                .partial_deriv(1),
-            Some(PolySequence::new(vec![12, 5, 4], 1, 2).unwrap()),
+                .partial_deriv(x1)
+                .collect(),
+            PolySequence::new(vec![12, 5, 4], 0..2, 1).unwrap(),
         );
     }
 
     #[test]
     fn mul() {
-        let l = PolySequence::new([2, 1], 1, 1).unwrap();
-        let r = PolySequence::new([4, 3], 1, 1).unwrap();
+        let l = PolySequence::new([2, 1], 0..1, 1).unwrap();
+        let r = PolySequence::new([4, 3], 0..1, 1).unwrap();
         assert_eq!(
-            l.mul_same_vars(r.iter()),
-            Ok(PolySequence::new(vec![8, 10, 3], 2, 1).unwrap()),
+            l.mul(&r).collect(),
+            PolySequence::new(vec![8, 10, 3], 0..1, 2).unwrap(),
         );
 
-        let l = PolySequence::new([3, 2, 1], 1, 2).unwrap();
-        let r = PolySequence::new([6, 5, 4], 1, 2).unwrap();
+        let l = PolySequence::new([3, 2, 1], 0..2, 1).unwrap();
+        let r = PolySequence::new([6, 5, 4], 0..2, 1).unwrap();
         assert_eq!(
-            l.mul_same_vars(r.iter()),
-            Ok(PolySequence::new(vec![18, 27, 18, 10, 13, 4], 2, 2).unwrap()),
+            l.mul(&r).collect(),
+            PolySequence::new(vec![18, 27, 18, 10, 13, 4], 0..2, 2).unwrap(),
         );
     }
 
-//    #[test]
-//    fn pow() {
-//        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 0)[..], [1.]);
-//        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 1)[..], [0., 2.]);
-//        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 2)[..], [0., 0., 4.]);
-//        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 3)[..], [0., 0., 0., 8.]);
-//        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 4)[..], [0., 0., 0., 0., 16.]);
-//    }
-//
-//    #[test]
-//    fn transform_matrix_1d() {
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.5, 0.0], 1, 1, 2, 1)[..],
-//            [
-//                0.25, 0.0, 0.0, //
-//                0.0, 0.5, 0.0, //
-//                0.0, 0.0, 1.0, //
-//            ]
-//        );
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.5, 0.5], 1, 1, 2, 1)[..],
-//            [
-//                0.25, 0.0, 0.0, //
-//                0.5, 0.5, 0.0, //
-//                0.25, 0.5, 1.0, //
-//            ]
-//        );
-//    }
-//
-//    #[test]
-//    fn transform_matrix_2d() {
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], 1, 2, 2, 2)[..],
-//            [
-//                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.00, 0.50, 0.00, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.00, 0.50, 0.00, //
-//                0.00, 0.00, 0.00, 0.00, 0.00, 1.00, //
-//            ]
-//        );
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.0, 0.5, 0.5, 0.5, 0.0, 0.0], 1, 2, 2, 2)[..],
-//            [
-//                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.25, 0.50, 0.00, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.50, 0.50, 0.00, //
-//                0.00, 0.00, 0.00, 0.25, 0.50, 1.00, //
-//            ]
-//        );
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.0, 0.5, 0.0, 0.5, 0.0, 0.5], 1, 2, 2, 2)[..],
-//            [
-//                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
-//                0.50, 0.00, 0.50, 0.00, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.00, 0.50, 0.00, //
-//                0.25, 0.00, 0.50, 0.00, 0.00, 1.00, //
-//            ]
-//        );
-//        assert_abs_diff_eq!(
-//            super::transform_matrix(&[0.0, 0.5, 0.5, 0.5, 0.0, 0.5], 1, 2, 2, 2)[..],
-//            [
-//                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
-//                0.50, 0.25, 0.50, 0.00, 0.00, 0.00, //
-//                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
-//                0.00, 0.25, 0.00, 0.50, 0.50, 0.00, //
-//                0.25, 0.25, 0.50, 0.25, 0.50, 1.00, //
-//            ]
-//        );
-//    }
+    #[test]
+    fn composition() {
+        let p = PolySequence::new([2, 1], 0..1, 1).unwrap();
+        let q = PolySequence::new([4, 3], 1..2, 1).unwrap();
+        let desired = PolySequence::new(vec![8, 7], 1..2, 1).unwrap();
+        assert_eq!(EvalCompositionCoeffsIter.eval(p, &[q]), desired,);
+
+        let p = PolySequence::new([3, 2, 1], 0..1, 2).unwrap();
+        let q = PolySequence::new([4, 3], 1..2, 1).unwrap();
+        let desired = PolySequence::new(vec![48, 80, 34], 1..2, 2).unwrap();
+        assert_eq!(EvalCompositionCoeffsIter.eval(p, &[q]), desired,);
+
+        let p = PolySequence::new([3, 2, 1], 0..2, 1).unwrap();
+        let q = PolySequence::new([4, 3], 2..3, 1).unwrap();
+        let r = PolySequence::new([2, 1], 3..4, 1).unwrap();
+        let desired = PolySequence::new(vec![6, 8, 10], 2..4, 1).unwrap();
+        assert_eq!(EvalCompositionCoeffsIter.eval(p, &[q, r]), desired,);
+    }
+
+    //    #[test]
+    //    fn pow() {
+    //        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 0)[..], [1.]);
+    //        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 1)[..], [0., 2.]);
+    //        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 2)[..], [0., 0., 4.]);
+    //        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 3)[..], [0., 0., 0., 8.]);
+    //        assert_abs_diff_eq!(super::pow(&[0., 2.], 1, 1, 4)[..], [0., 0., 0., 0., 16.]);
+    //    }
+    //
+    //    #[test]
+    //    fn transform_matrix_1d() {
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.5, 0.0], 1, 1, 2, 1)[..],
+    //            [
+    //                0.25, 0.0, 0.0, //
+    //                0.0, 0.5, 0.0, //
+    //                0.0, 0.0, 1.0, //
+    //            ]
+    //        );
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.5, 0.5], 1, 1, 2, 1)[..],
+    //            [
+    //                0.25, 0.0, 0.0, //
+    //                0.5, 0.5, 0.0, //
+    //                0.25, 0.5, 1.0, //
+    //            ]
+    //        );
+    //    }
+    //
+    //    #[test]
+    //    fn transform_matrix_2d() {
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.0, 0.5, 0.0, 0.5, 0.0, 0.0], 1, 2, 2, 2)[..],
+    //            [
+    //                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.00, 0.50, 0.00, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.00, 0.50, 0.00, //
+    //                0.00, 0.00, 0.00, 0.00, 0.00, 1.00, //
+    //            ]
+    //        );
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.0, 0.5, 0.5, 0.5, 0.0, 0.0], 1, 2, 2, 2)[..],
+    //            [
+    //                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.25, 0.50, 0.00, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.50, 0.50, 0.00, //
+    //                0.00, 0.00, 0.00, 0.25, 0.50, 1.00, //
+    //            ]
+    //        );
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.0, 0.5, 0.0, 0.5, 0.0, 0.5], 1, 2, 2, 2)[..],
+    //            [
+    //                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
+    //                0.50, 0.00, 0.50, 0.00, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.00, 0.50, 0.00, //
+    //                0.25, 0.00, 0.50, 0.00, 0.00, 1.00, //
+    //            ]
+    //        );
+    //        assert_abs_diff_eq!(
+    //            super::transform_matrix(&[0.0, 0.5, 0.5, 0.5, 0.0, 0.5], 1, 2, 2, 2)[..],
+    //            [
+    //                0.25, 0.00, 0.00, 0.00, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.00, 0.00, 0.00, //
+    //                0.50, 0.25, 0.50, 0.00, 0.00, 0.00, //
+    //                0.00, 0.00, 0.00, 0.25, 0.00, 0.00, //
+    //                0.00, 0.25, 0.00, 0.50, 0.50, 0.00, //
+    //                0.25, 0.25, 0.50, 0.25, 0.50, 1.00, //
+    //            ]
+    //        );
+    //    }
 }
 
 #[cfg(all(feature = "bench", test))]
 mod benches {
     extern crate test;
     use self::test::Bencher;
-    use super::{Eval, Mul, PartialDeriv, PolySequence};
+    use super::{Poly, PolySequence};
 
     macro_rules! mk_bench_eval {
         ($name:ident, $degree:literal, $nvars:literal) => {
             #[bench]
             fn $name(b: &mut Bencher) {
-                let coeffs: Vec<_> = (1..=super::ncoeffs($degree, $nvars))
+                let coeffs: Vec<_> = (1..=super::ncoeffs($nvars, $degree))
                     .map(|i| i as f64)
                     .collect();
-                let coeffs = &coeffs[..];
-                let vars: Vec<_> = (1..=$nvars).map(|x| x as f64).collect();
-                let poly = PolySequence::new(coeffs, $degree, $nvars).unwrap();
-                b.iter(|| test::black_box(&poly).eval(&vars))
+                let values: Vec<_> = (1..=$nvars).map(|x| x as f64).collect();
+                let poly = PolySequence::new(coeffs, 0..$nvars, $degree).unwrap();
+                b.iter(|| test::black_box(&poly).eval(&values[..]))
             }
         };
     }
@@ -1806,45 +1929,45 @@ mod benches {
 
     #[bench]
     fn ncoeffs_3d_degree4(b: &mut Bencher) {
-        b.iter(|| super::ncoeffs(test::black_box(4), test::black_box(3)));
+        b.iter(|| super::ncoeffs(test::black_box(3), test::black_box(4)));
     }
 
     #[bench]
     fn mul_same_vars_3d_degree4_degree2(b: &mut Bencher) {
         let l = PolySequence::new(
-            (0..super::ncoeffs(4, 3))
+            (0..super::ncoeffs(3, 4))
                 .into_iter()
                 .map(|i| i as f64)
                 .collect::<Vec<_>>(),
+            0..3,
             4,
-            3,
         )
         .unwrap();
         let r = PolySequence::new(
-            (0..super::ncoeffs(2, 3))
+            (0..super::ncoeffs(3, 2))
                 .into_iter()
                 .map(|i| i as f64)
                 .collect::<Vec<_>>(),
+            0..3,
             2,
-            3,
         )
         .unwrap();
         b.iter(|| {
             test::black_box(&l)
-                .mul_same_vars::<Vec<_>>(test::black_box(r.iter()))
-                .unwrap()
+                .mul(test::black_box(&r))
+                .collect::<Vec<_>>()
         });
     }
 
     #[bench]
     fn mul_different_vars_1d_degree4_2d_degree2(b: &mut Bencher) {
         let l = PolySequence::new(
-            (0..super::ncoeffs(4, 1))
+            (0..super::ncoeffs(1, 4))
                 .into_iter()
                 .map(|i| i as f64)
                 .collect::<Vec<_>>(),
+            0..1,
             4,
-            1,
         )
         .unwrap();
         let r = PolySequence::new(
@@ -1852,14 +1975,14 @@ mod benches {
                 .into_iter()
                 .map(|i| i as f64)
                 .collect::<Vec<_>>(),
-            2,
+            1..3,
             2,
         )
         .unwrap();
         b.iter(|| {
             test::black_box(&l)
-                .mul_different_vars::<Vec<_>>(test::black_box(r.iter()))
-                .unwrap()
+                .mul(test::black_box(&r))
+                .collect::<Vec<_>>()
         });
     }
 
@@ -1868,7 +1991,7 @@ mod benches {
     //    b.iter(|| {
     //        super::pow(
     //            test::black_box(
-    //                &(0..super::ncoeffs(4, 3))
+    //                &(0..super::ncoeffs(3, 4))
     //                    .into_iter()
     //                    .map(|i| i as f64)
     //                    .collect::<Vec<_>>()[..],
