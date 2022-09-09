@@ -423,19 +423,6 @@ type VariablesBits = u8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Variable(u8);
 
-impl TryFrom<u8> for Variable {
-    type Error = Error;
-
-    #[inline]
-    fn try_from(var: u8) -> Result<Self, Error> {
-        if var >= VariablesBits::BITS as u8 {
-            Err(Error::VariableOutOfRange)
-        } else {
-            Ok(Self(var))
-        }
-    }
-}
-
 impl TryFrom<usize> for Variable {
     type Error = Error;
 
@@ -817,8 +804,10 @@ impl PowersIter {
             self.powers.fill(0);
             *self.powers.last_mut().unwrap() = degree;
             *self.powers.first_mut().unwrap() += 1;
+            self.rem = 0;
+        } else {
+            self.rem = 1;
         }
-        self.rem = 0;
     }
 }
 
@@ -1285,6 +1274,11 @@ where
             return Err(Error::AssignLowerDegree);
         } else if !self.vars().is_contained_in(tvars) {
             return Err(Error::AssignMissingVariables);
+        } else if self.lhs.degree() == 0 && self.rhs.degree() == 0 {
+            let lc = self.lhs.coeffs_iter().next().unwrap();
+            let rc = self.rhs.coeffs_iter().next().unwrap();
+            *target.coeffs.last_mut().unwrap() += lc * rc;
+            return Ok(());
         } else if self.lhs.vars() == self.rhs.vars() && self.lhs.vars() == tvars {
             let mut lpowers = powers_iter(self.lhs.nvars(), self.lhs.degree());
             let mut rpowers = powers_iter(self.rhs.nvars(), self.rhs.degree());
@@ -1413,7 +1407,7 @@ where
 
     #[inline]
     fn coeffs_iter(self) -> Self::CoeffsIter {
-        if let Some(index) = self.vars().index(self.var) {
+        if let Some(index) = self.poly.vars().index(self.var) {
             // If the degree of `self.poly` is zero, the iterator we return
             // here will be empty, which violates the requirement of `Poly`:
             // the number of coefficients for a polynomial of degree zero is
@@ -1925,6 +1919,13 @@ mod tests {
             PolySequence::new(vec![0], 0..1, 0).unwrap(),
         );
         assert_eq!(
+            PolySequence::new([2, 1], 0..1, 1)
+                .unwrap()
+                .partial_deriv(x0)
+                .collect(),
+            PolySequence::new(vec![2], 0..1, 0).unwrap(),
+        );
+        assert_eq!(
             PolySequence::new([4, 3, 2, 1], 0..1, 3)
                 .unwrap()
                 .partial_deriv(x0)
@@ -1949,6 +1950,13 @@ mod tests {
 
     #[test]
     fn mul() {
+        let l = PolySequence::new([2], 0..1, 0).unwrap();
+        let r = PolySequence::new([3], 0..1, 0).unwrap();
+        assert_eq!(
+            l.mul(&r).collect(),
+            PolySequence::new(vec![6], 0..1, 0).unwrap(),
+        );
+
         let l = PolySequence::new([2, 1], 0..1, 1).unwrap();
         let r = PolySequence::new([4, 3], 0..1, 1).unwrap();
         assert_eq!(
