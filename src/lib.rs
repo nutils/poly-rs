@@ -99,18 +99,12 @@ where
         self.len().checked_sub(1).and_then(|index| self.get(index))
     }
 
-    /// Returns a reference to an element, without doing bounds checking.
-    #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &Self::Item {
-        self.get(index).unwrap()
-    }
-
     /// Returns an iterator over the sequence.
     fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter;
 }
 
 /// An interface for finite sequences with mutable elements.
-pub trait MutSequence: Sequence
+pub trait SequenceMut: Sequence
 where
     Self: for<'me> SequenceIterMutType<'me, &'me mut Self::Item>,
 {
@@ -129,12 +123,6 @@ where
         self.len()
             .checked_sub(1)
             .and_then(|index| self.get_mut(index))
-    }
-
-    /// Returns a mutable reference to an element, without doing bounds checking.
-    #[inline]
-    unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut Self::Item {
-        self.get_mut(index).unwrap()
     }
 
     #[inline]
@@ -165,9 +153,9 @@ pub trait SequenceIterType<'me, Item> {
     type Iter: Iterator<Item = Item>;
 }
 
-/// Return type of [`MutSequence::iter_mut()`].
+/// Return type of [`SequenceMut::iter_mut()`].
 pub trait SequenceIterMutType<'me, Item> {
-    /// Return type of [`MutSequence::iter_mut()`].
+    /// Return type of [`SequenceMut::iter_mut()`].
     type IterMut: Iterator<Item = Item>;
 }
 
@@ -193,23 +181,15 @@ macro_rules! impl_sequence_for_as_ref_slice {
                 <Self as AsRef::<[$T]>>::as_ref(self).get(index)
             }
             #[inline]
-            unsafe fn get_unchecked(&self, index: usize) -> &$T {
-                <Self as AsRef::<[$T]>>::as_ref(self).get_unchecked(index)
-            }
-            #[inline]
             fn iter(&self) -> <Self as SequenceIterType<'_, &$T>>::Iter {
                 <Self as AsRef::<[$T]>>::as_ref(self).iter()
             }
         }
 
-        impl<$($params)* MutSequence for $ty {
+        impl<$($params)* SequenceMut for $ty {
             #[inline]
             fn get_mut(&mut self, index: usize) -> Option<&mut $T> {
                 <Self as AsMut::<[$T]>>::as_mut(self).get_mut(index)
-            }
-            #[inline]
-            unsafe fn get_unchecked_mut(&mut self, index: usize) -> &mut $T {
-                <Self as AsMut::<[$T]>>::as_mut(self).get_unchecked_mut(index)
             }
             #[inline]
             fn fill(&mut self, value: Self::Item)
@@ -264,10 +244,6 @@ impl<S: Sequence + ?Sized> Sequence for &S {
         (**self).get(index)
     }
     #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &Self::Item {
-        (**self).get_unchecked(index)
-    }
-    #[inline]
     fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
         (**self).iter()
     }
@@ -285,16 +261,12 @@ impl<S: Sequence + ?Sized> Sequence for &mut S {
         (**self).get(index)
     }
     #[inline]
-    unsafe fn get_unchecked(&self, index: usize) -> &Self::Item {
-        (**self).get_unchecked(index)
-    }
-    #[inline]
     fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
         (**self).iter()
     }
 }
 
-impl<S: MutSequence + ?Sized> MutSequence for &mut S {
+impl<S: SequenceMut + ?Sized> SequenceMut for &mut S {
     #[inline]
     fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item> {
         (**self).get_mut(index)
@@ -316,6 +288,101 @@ impl<S: MutSequence + ?Sized> MutSequence for &mut S {
     #[inline]
     fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut Self::Item>>::IterMut {
         (**self).iter_mut()
+    }
+}
+
+#[cfg(feature = "ndarray")]
+mod impl_ndarray {
+    use super::{SequenceIterType, SequenceIterMutType, Sequence, SequenceMut};
+    use ndarray::{ArrayBase, Ix1, Data, DataMut};
+    use ndarray::iter::{Iter, IterMut};
+
+    impl<'me, S: Data> SequenceIterType<'me, &'me S::Elem> for ArrayBase<S, Ix1> {
+        type Iter = Iter<'me, S::Elem, Ix1>;
+    }
+
+    impl<'me, S: Data> SequenceIterMutType<'me, &'me mut S::Elem> for ArrayBase<S, Ix1> {
+        type IterMut = IterMut<'me, S::Elem, Ix1>;
+    }
+
+    impl<S: Data> Sequence for ArrayBase<S, Ix1> {
+        type Item = S::Elem;
+
+        #[inline]
+        fn len(&self) -> usize {
+            self.len()
+        }
+        #[inline]
+        fn get(&self, index: usize) -> Option<&Self::Item> {
+            self.get(index)
+        }
+        #[inline]
+        fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
+            self.iter()
+        }
+    }
+
+    impl<S: Data + DataMut> SequenceMut for ArrayBase<S, Ix1> {
+        #[inline]
+        fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item> {
+            self.get_mut(index)
+        }
+        #[inline]
+        fn fill(&mut self, value: Self::Item)
+        where
+            Self::Item: Clone,
+        {
+            self.fill(value);
+        }
+        #[inline]
+        fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut Self::Item>>::IterMut {
+            self.iter_mut()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::{Sequence, SequenceMut};
+        use ndarray::array;
+
+        #[test]
+        fn len() {
+            assert_eq!(Sequence::len(&array![0, 1, 2]), 3);
+        }
+
+        #[test]
+        fn get() {
+            assert_eq!(Sequence::get(&array![0, 1, 2], 1), Some(&1));
+            assert_eq!(Sequence::get(&array![0, 1, 2], 3), None);
+        }
+
+        #[test]
+        fn iter() {
+            assert_eq!(Sequence::iter(&array![0, 1, 2]).copied().collect::<Vec<_>>(), vec![0, 1, 2]);
+        }
+
+        #[test]
+        fn get_mut() {
+            let mut a = array![1, 3, 5];
+            *SequenceMut::get_mut(&mut a, 1).unwrap() = 7;
+            assert_eq!(Sequence::get(&a, 1), Some(&7));
+        }
+
+        #[test]
+        fn fill() {
+            let mut a = array![1, 3, 5];
+            SequenceMut::fill(&mut a, 7);
+            assert_eq!(Sequence::iter(&a).copied().collect::<Vec<_>>(), vec![7, 7, 7]);
+        }
+
+        #[test]
+        fn iter_mut() {
+            let mut a = array![1, 3, 5];
+            let mut iter = SequenceMut::iter_mut(&mut a);
+            *iter.next().unwrap() = 7;
+            *iter.next().unwrap() = 9;
+            assert_eq!(Sequence::iter(&a).copied().collect::<Vec<_>>(), vec![7, 9, 5]);
+        }
     }
 }
 
@@ -938,7 +1005,7 @@ pub trait Poly: Sized {
     fn assign_to<TargetCoeffs>(self, target: &mut PolySequence<TargetCoeffs>) -> Result<(), Error>
     where
         Self::Coeff: Zero,
-        TargetCoeffs: Sequence<Item = Self::Coeff> + MutSequence,
+        TargetCoeffs: Sequence<Item = Self::Coeff> + SequenceMut,
     {
         let degree = self.degree();
         if target.degree() < degree {
@@ -1001,7 +1068,7 @@ pub trait Poly: Sized {
     ) -> Result<(), Error>
     where
         TargetCoeff: ops::AddAssign<Self::Coeff>,
-        TargetCoeffs: Sequence<Item = TargetCoeff> + MutSequence,
+        TargetCoeffs: Sequence<Item = TargetCoeff> + SequenceMut,
     {
         let degree = self.degree();
         if target.degree() < degree {
@@ -1253,7 +1320,7 @@ where
     #[inline]
     fn assign_to<TargetCoeffs>(self, target: &mut PolySequence<TargetCoeffs>) -> Result<(), Error>
     where
-        TargetCoeffs: Sequence<Item = Self::Coeff> + MutSequence,
+        TargetCoeffs: Sequence<Item = Self::Coeff> + SequenceMut,
     {
         target.coeffs.fill_with(|| Self::Coeff::zero());
         self.add_to(target)
@@ -1265,7 +1332,7 @@ where
     ) -> Result<(), Error>
     where
         TargetCoeff: ops::AddAssign<Self::Coeff>,
-        TargetCoeffs: Sequence<Item = TargetCoeff> + MutSequence,
+        TargetCoeffs: Sequence<Item = TargetCoeff> + SequenceMut,
     {
         let tvars = target.vars();
         let tnvars = tvars.len();

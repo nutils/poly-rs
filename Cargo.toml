@@ -11,10 +11,10 @@ categories = ["mathematics"]
 
 [features]
 bench = []
-poly_eval_loop = []
 
 [dependencies]
 num-traits = "0.2"
+ndarray = { version = "0.15", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
