@@ -370,7 +370,7 @@ impl From<std::convert::Infallible> for Error {
 
 /// Returns the number of coefficients for a polynomial of given degree and number of variables.
 #[inline]
-pub const fn ncoeffs(nvars: usize, degree: usize) -> usize {
+pub const fn ncoeffs(nvars: usize, degree: Power) -> usize {
     // To improve the performance the implementation is specialized for
     // polynomials in zero to three variables.
     match nvars {
@@ -383,11 +383,11 @@ pub const fn ncoeffs(nvars: usize, degree: usize) -> usize {
 }
 
 #[inline]
-const fn ncoeffs_impl(nvars: usize, degree: usize) -> usize {
+const fn ncoeffs_impl(nvars: usize, degree: Power) -> usize {
     let mut n = 1;
     let mut i = 1;
     while i <= nvars {
-        n = n * (degree + i) / i;
+        n = n * (degree as usize + i) / i;
         i += 1;
     }
     n
@@ -395,7 +395,7 @@ const fn ncoeffs_impl(nvars: usize, degree: usize) -> usize {
 
 /// Returns the sum of the number of coefficients up to (excluding) the given degree.
 #[inline]
-const fn ncoeffs_sum(nvars: usize, degree: usize) -> usize {
+const fn ncoeffs_sum(nvars: usize, degree: Power) -> usize {
     // To improve the performance the implementation is specialized for
     // polynomials in zero to three variables.
     match nvars {
@@ -408,202 +408,17 @@ const fn ncoeffs_sum(nvars: usize, degree: usize) -> usize {
 }
 
 #[inline]
-const fn ncoeffs_sum_impl(nvars: usize, degree: usize) -> usize {
+const fn ncoeffs_sum_impl(nvars: usize, degree: Power) -> usize {
     let mut n = 1;
     let mut i = 0;
     while i <= nvars {
-        n = n * (degree + i) / (i + 1);
+        n = n * (degree as usize + i) / (i + 1);
         i += 1;
     }
     n
 }
 
-// TODO: Compact representation of `Powers`:
-//
-// #[derive(Debug, Clone)]
-// struct Powers(SmallVec<u8>);
-
-/// Returns the index of the coefficient for the given powers.
-///
-/// Returns `None` if the sum of powers exceeds the given degree.
-#[inline]
-pub fn powers_to_index(powers: &[usize], degree: usize) -> Option<usize> {
-    powers
-        .iter()
-        .copied()
-        .enumerate()
-        .rev()
-        .try_fold((0, degree), |(index, degree), (nvars, power)| {
-            let degree = degree.checked_sub(power)?;
-            let index = index + ncoeffs_sum(nvars, degree);
-            Some((index, degree))
-        })
-        .map(|(index, _)| index)
-}
-
-#[inline]
-fn powers_rev_iter_to_index(
-    mut rev_powers: impl Iterator<Item = usize>,
-    mut degree: usize,
-    nvars: usize,
-) -> Option<usize> {
-    let mut index = 0;
-    for nvars in (1..nvars).rev() {
-        degree = degree.checked_sub(rev_powers.next().unwrap())?;
-        index += ncoeffs_sum(nvars, degree);
-    }
-    degree
-        .checked_sub(rev_powers.next().unwrap())
-        .map(|degree| index + degree)
-}
-
-/// Returns the powers for the given index.
-///
-/// Returns `None` if the index is larger or equal to the number of coeffients
-/// for the given degree and number of variables.
-#[inline]
-pub fn index_to_powers(index: usize, nvars: usize, degree: usize) -> Option<Vec<usize>> {
-    // FIXME: return None if index is out of bounds
-    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
-    index_to_powers_increment(index, degree, &mut powers).map(|()| powers)
-}
-
-#[inline]
-fn index_to_powers_increment(
-    mut index: usize,
-    mut degree: usize,
-    powers: &mut [usize],
-) -> Option<()> {
-    if powers.is_empty() {
-        return Some(());
-    }
-    'outer: for ivar in (1..powers.len()).rev() {
-        for i in 0..=degree {
-            let n = ncoeffs(ivar, i);
-            if index < n {
-                powers[ivar] += degree - i;
-                #[allow(clippy::mut_range_bound)]
-                {
-                    degree = i;
-                }
-                continue 'outer;
-            }
-            index -= n;
-        }
-        return None;
-    }
-    if let Some(power) = degree.checked_sub(index) {
-        powers[0] += power;
-        Some(())
-    } else {
-        None
-    }
-}
-
-/// Lending iterator of powers in reverse lexicographic order.
-///
-/// This struct is created by [`powers_iter()`].
-#[derive(Debug, Clone, PartialEq)]
-struct PowersIter {
-    powers: Vec<usize>,
-    rem: usize,
-}
-
-impl PowersIter {
-    /// Returns a reference to the next vector of powers in reverse lexicographic order.
-    #[inline]
-    fn next(&mut self) -> Option<&[usize]> {
-        if self.powers.len() == 0 {
-            if self.rem > 0 {
-                self.rem = 0;
-                return Some(&self.powers);
-            } else {
-                return None;
-            }
-        }
-        if let Some(power) = self.powers[0].checked_sub(1) {
-            self.powers[0] = power;
-            self.rem += 1;
-            return Some(&self.powers);
-        }
-        for ivar in 0..self.powers.len() - 1 {
-            if let Some(power) = self.powers[ivar + 1].checked_sub(1) {
-                self.powers[ivar + 1] = power;
-                self.powers[ivar] = self.rem;
-                self.rem = 1;
-                return Some(&self.powers);
-            }
-        }
-        None
-    }
-
-    /// Returns an iterator of powers corresponding to one variable.
-    #[inline]
-    fn get(self, index: usize) -> Option<NthPowerIter> {
-        (index < self.powers.len()).then(|| NthPowerIter {
-            powers: self,
-            index,
-        })
-    }
-
-    /// Returns an iterator of the sum of the powers.
-    #[inline]
-    fn sum_of_powers(self) -> SumOfPowersIter {
-        SumOfPowersIter(self)
-    }
-
-    /// Resets the iterator to the initial state for the given degree.
-    #[inline]
-    fn reset(&mut self, degree: usize) {
-        if !self.powers.is_empty() {
-            self.powers.fill(0);
-            *self.powers.last_mut().unwrap() = degree;
-            *self.powers.first_mut().unwrap() += 1;
-        }
-        self.rem = 0;
-    }
-}
-
-/// Returns a lending iterator of powers in reverse lexicographic order.
-fn powers_iter(nvars: usize, degree: usize) -> PowersIter {
-    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
-    let rem: usize;
-    if nvars > 0 {
-        powers[nvars - 1] = degree;
-        powers[0] += 1;
-        rem = 0;
-    } else {
-        rem = 1;
-    }
-    PowersIter { powers, rem }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct NthPowerIter {
-    powers: PowersIter,
-    index: usize,
-}
-
-impl Iterator for NthPowerIter {
-    type Item = usize;
-
-    #[inline]
-    fn next(&mut self) -> Option<usize> {
-        self.powers.next().map(|powers| powers[self.index])
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct SumOfPowersIter(PowersIter);
-
-impl Iterator for SumOfPowersIter {
-    type Item = usize;
-
-    #[inline]
-    fn next(&mut self) -> Option<usize> {
-        self.0.next().map(|powers| powers.iter().sum())
-    }
-}
+type VariablesBits = u8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Variable(u8);
@@ -613,7 +428,7 @@ impl TryFrom<u8> for Variable {
 
     #[inline]
     fn try_from(var: u8) -> Result<Self, Error> {
-        if var >= u64::BITS as u8 {
+        if var >= VariablesBits::BITS as u8 {
             Err(Error::VariableOutOfRange)
         } else {
             Ok(Self(var))
@@ -621,8 +436,21 @@ impl TryFrom<u8> for Variable {
     }
 }
 
+impl TryFrom<usize> for Variable {
+    type Error = Error;
+
+    #[inline]
+    fn try_from(var: usize) -> Result<Self, Error> {
+        if var >= VariablesBits::BITS as usize {
+            Err(Error::VariableOutOfRange)
+        } else {
+            Ok(Self(var as u8))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Variables(u64);
+pub struct Variables(VariablesBits);
 
 impl Variables {
     /// Returns the number of variables in the set.
@@ -659,7 +487,7 @@ impl Variables {
     #[inline]
     pub const fn index(&self, var: Variable) -> Option<usize> {
         if self.get(var) {
-            Some(Variables(self.0 & !(u64::MAX << var.0)).len())
+            Some(Variables(self.0 & !(VariablesBits::MAX << var.0)).len())
         } else {
             None
         }
@@ -770,7 +598,7 @@ impl TryFrom<ops::Range<usize>> for Variables {
 
     #[inline]
     fn try_from(value: ops::Range<usize>) -> Result<Self, Error> {
-        if value.end > u64::BITS as usize {
+        if value.end > VariablesBits::BITS as usize {
             Err(Error::VariableOutOfRange)
         } else {
             let mut vars = 0;
@@ -790,7 +618,7 @@ impl TryFrom<&[usize]> for Variables {
         let mut vars = 0;
         for i in value {
             let i = *i;
-            if i >= u64::BITS as usize {
+            if i >= VariablesBits::BITS as usize {
                 return Err(Error::VariableOutOfRange);
             } else if (vars >> i) & 1 == 1 {
                 return Err(Error::DuplicateVariable);
@@ -811,7 +639,7 @@ impl<const N: usize> TryFrom<[usize; N]> for Variables {
     fn try_from(value: [usize; N]) -> Result<Self, Error> {
         let mut vars = 0;
         for i in value {
-            if i >= u64::BITS as usize {
+            if i >= VariablesBits::BITS as usize {
                 return Err(Error::VariableOutOfRange);
             } else if (vars >> i) & 1 == 1 {
                 return Err(Error::DuplicateVariable);
@@ -825,7 +653,7 @@ impl<const N: usize> TryFrom<[usize; N]> for Variables {
     }
 }
 
-pub struct VariablesIter(u64, u8);
+pub struct VariablesIter(VariablesBits, u8);
 
 impl Iterator for VariablesIter {
     type Item = Variable;
@@ -847,9 +675,197 @@ impl Iterator for VariablesIter {
     }
 }
 
+pub type Power = u8;
+
+/// Returns the index of the coefficient for the given powers.
+///
+/// Returns `None` if the sum of powers exceeds the given degree.
+#[inline]
+pub fn powers_to_index(powers: &[Power], degree: Power) -> Option<usize> {
+    powers
+        .iter()
+        .copied()
+        .enumerate()
+        .rev()
+        .try_fold((0, degree), |(index, degree), (nvars, power)| {
+            let degree = degree.checked_sub(power)?;
+            let index = index + ncoeffs_sum(nvars, degree);
+            Some((index, degree))
+        })
+        .map(|(index, _)| index)
+}
+
+#[inline]
+fn powers_rev_iter_to_index(
+    mut rev_powers: impl Iterator<Item = Power>,
+    mut degree: Power,
+    nvars: usize,
+) -> Option<usize> {
+    let mut index = 0;
+    for nvars in (1..nvars).rev() {
+        degree = degree.checked_sub(rev_powers.next().unwrap())?;
+        index += ncoeffs_sum(nvars, degree);
+    }
+    degree
+        .checked_sub(rev_powers.next().unwrap())
+        .map(|degree| index + degree as usize)
+}
+
+/// Returns the powers for the given index.
+///
+/// Returns `None` if the index is larger or equal to the number of coeffients
+/// for the given degree and number of variables.
+#[inline]
+pub fn index_to_powers(index: usize, nvars: usize, degree: Power) -> Option<Vec<Power>> {
+    // FIXME: return None if index is out of bounds
+    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
+    index_to_powers_increment(index, degree, &mut powers).map(|()| powers)
+}
+
+#[inline]
+fn index_to_powers_increment(
+    mut index: usize,
+    mut degree: Power,
+    powers: &mut [Power],
+) -> Option<()> {
+    if powers.is_empty() {
+        return Some(());
+    }
+    'outer: for ivar in (1..powers.len()).rev() {
+        for i in 0..=degree {
+            let n = ncoeffs(ivar, i);
+            if index < n {
+                powers[ivar] += degree - i;
+                #[allow(clippy::mut_range_bound)]
+                {
+                    degree = i;
+                }
+                continue 'outer;
+            }
+            index -= n;
+        }
+        return None;
+    }
+    if let Ok(index) = Power::try_from(index) {
+        if let Some(power) = degree.checked_sub(index as Power) {
+            powers[0] += power;
+            Some(())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Lending iterator of powers in reverse lexicographic order.
+///
+/// This struct is created by [`powers_iter()`].
+#[derive(Debug, Clone, PartialEq)]
+struct PowersIter {
+    powers: Vec<Power>,
+    rem: Power,
+}
+
+impl PowersIter {
+    /// Returns a reference to the next vector of powers in reverse lexicographic order.
+    #[inline]
+    fn next(&mut self) -> Option<&[Power]> {
+        if self.powers.len() == 0 {
+            if self.rem > 0 {
+                self.rem = 0;
+                return Some(&self.powers);
+            } else {
+                return None;
+            }
+        }
+        if let Some(power) = self.powers[0].checked_sub(1) {
+            self.powers[0] = power;
+            self.rem += 1;
+            return Some(&self.powers);
+        }
+        for ivar in 0..self.powers.len() - 1 {
+            if let Some(power) = self.powers[ivar + 1].checked_sub(1) {
+                self.powers[ivar + 1] = power;
+                self.powers[ivar] = self.rem;
+                self.rem = 1;
+                return Some(&self.powers);
+            }
+        }
+        None
+    }
+
+    /// Returns an iterator of powers corresponding to one variable.
+    #[inline]
+    fn get(self, index: usize) -> Option<NthPowerIter> {
+        (index < self.powers.len()).then(|| NthPowerIter {
+            powers: self,
+            index,
+        })
+    }
+
+    /// Returns an iterator of the sum of the powers.
+    #[inline]
+    fn sum_of_powers(self) -> SumOfPowersIter {
+        SumOfPowersIter(self)
+    }
+
+    /// Resets the iterator to the initial state for the given degree.
+    #[inline]
+    fn reset(&mut self, degree: Power) {
+        if !self.powers.is_empty() {
+            self.powers.fill(0);
+            *self.powers.last_mut().unwrap() = degree;
+            *self.powers.first_mut().unwrap() += 1;
+        }
+        self.rem = 0;
+    }
+}
+
+/// Returns a lending iterator of powers in reverse lexicographic order.
+fn powers_iter(nvars: usize, degree: Power) -> PowersIter {
+    let mut powers = iter::repeat(0).take(nvars).collect::<Vec<_>>();
+    let rem: Power;
+    if nvars > 0 {
+        powers[nvars - 1] = degree;
+        powers[0] += 1;
+        rem = 0;
+    } else {
+        rem = 1;
+    }
+    PowersIter { powers, rem }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct NthPowerIter {
+    powers: PowersIter,
+    index: usize,
+}
+
+impl Iterator for NthPowerIter {
+    type Item = Power;
+
+    #[inline]
+    fn next(&mut self) -> Option<Power> {
+        self.powers.next().map(|powers| powers[self.index])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SumOfPowersIter(PowersIter);
+
+impl Iterator for SumOfPowersIter {
+    type Item = Power;
+
+    #[inline]
+    fn next(&mut self) -> Option<Power> {
+        self.0.next().map(|powers| powers.iter().sum())
+    }
+}
+
 pub trait IntegerMultiple {
     type Output;
-    fn integer_multiple(self, n: usize) -> Self::Output;
+    fn integer_multiple(self, n: Power) -> Self::Output;
 }
 
 macro_rules! impl_int_mul {
@@ -857,7 +873,7 @@ macro_rules! impl_int_mul {
         impl IntegerMultiple for $T {
             type Output = $T;
             #[inline]
-            fn integer_multiple(self, n: usize) -> $T {
+            fn integer_multiple(self, n: Power) -> $T {
                 self * n as $T
             }
         }
@@ -865,7 +881,7 @@ macro_rules! impl_int_mul {
         impl IntegerMultiple for &$T {
             type Output = $T;
             #[inline]
-            fn integer_multiple(self, n: usize) -> $T {
+            fn integer_multiple(self, n: Power) -> $T {
                 self * n as $T
             }
         }
@@ -889,7 +905,7 @@ pub trait Poly: Sized {
         self.vars().len()
     }
 
-    fn degree(&self) -> usize;
+    fn degree(&self) -> Power;
 
     #[inline]
     fn is_constant(&self) -> bool {
@@ -1059,7 +1075,7 @@ pub trait Poly: Sized {
 pub struct PolySequence<Coeffs> {
     coeffs: Coeffs,
     vars: Variables,
-    degree: usize,
+    degree: Power,
 }
 
 impl<Coeff, Coeffs> PolySequence<Coeffs>
@@ -1067,7 +1083,7 @@ where
     Coeffs: Sequence<Item = Coeff>,
 {
     #[inline]
-    pub fn new<Vars>(coeffs: Coeffs, vars: Vars, mut degree: usize) -> Result<Self, Error>
+    pub fn new<Vars>(coeffs: Coeffs, vars: Vars, mut degree: Power) -> Result<Self, Error>
     where
         Vars: TryInto<Variables>,
         Error: From<<Vars as TryInto<Variables>>::Error>,
@@ -1086,7 +1102,7 @@ where
     }
 
     #[inline]
-    fn new_unchecked(coeffs: Coeffs, vars: Variables, degree: usize) -> Self {
+    fn new_unchecked(coeffs: Coeffs, vars: Variables, degree: Power) -> Self {
         #[cfg(debug)]
         if degree == 0 || vars.len() == 0 {
             assert_eq!(degree, 0);
@@ -1100,7 +1116,7 @@ where
     }
 
     #[inline]
-    pub fn zeros(mut vars: Variables, mut degree: usize) -> Self
+    pub fn zeros(mut vars: Variables, mut degree: Power) -> Self
     where
         Coeff: Zero,
         Coeffs: FromIterator<Coeff>,
@@ -1134,7 +1150,7 @@ where
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         self.degree
     }
 
@@ -1157,7 +1173,7 @@ where
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         self.degree
     }
 
@@ -1180,7 +1196,7 @@ where
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         self.degree
     }
 
@@ -1201,7 +1217,7 @@ impl<Coeff> Poly for Constant<Coeff> {
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         0
     }
 
@@ -1234,7 +1250,7 @@ where
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         self.lhs.degree() + self.rhs.degree()
     }
 
@@ -1291,7 +1307,9 @@ where
                 }
             }
             return Ok(());
-        } else if self.lhs.vars().all_less_than(self.rhs.vars()) && self.lhs.vars() | self.rhs.vars() == tvars {
+        } else if self.lhs.vars().all_less_than(self.rhs.vars())
+            && self.lhs.vars() | self.rhs.vars() == tvars
+        {
             let mut lpowers = powers_iter(self.lhs.nvars(), self.lhs.degree());
             let mut rpowers = powers_iter(self.rhs.nvars(), self.rhs.degree());
             let mut lcoeffs = self.lhs.coeffs_iter();
@@ -1385,7 +1403,7 @@ where
     }
 
     #[inline]
-    fn degree(&self) -> usize {
+    fn degree(&self) -> Power {
         if self.poly.degree() <= 1 || !self.poly.vars().get(self.var) {
             0
         } else {
@@ -1485,7 +1503,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     fn eval_iter<Coeffs, Values>(
         &self,
         coeffs: &mut Coeffs,
-        degree: usize,
+        degree: Power,
         values: &Values,
     ) -> Output
     where
@@ -1510,21 +1528,21 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     }
 
     #[inline]
-    fn eval_1d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
+    fn eval_1d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
         Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
         let value = values.get(0).unwrap();
-        for coeff in coeffs.take(degree + 1) {
+        for coeff in coeffs.take(degree as usize + 1) {
             self.update_acc_coeff(&mut acc, coeff, value);
         }
         acc
     }
 
     #[inline]
-    fn eval_2d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
+    fn eval_2d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
         Values: Sequence<Item = Value> + ?Sized,
@@ -1539,7 +1557,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     }
 
     #[inline]
-    fn eval_3d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: usize, values: &Values) -> Output
+    fn eval_3d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
         Values: Sequence<Item = Value> + ?Sized,
@@ -1557,7 +1575,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     fn eval_nd<Coeffs, Values>(
         &self,
         coeffs: &mut Coeffs,
-        degree: usize,
+        degree: Power,
         values: &Values,
         nvars: usize,
     ) -> Output
@@ -1682,9 +1700,9 @@ where
 /// ```
 pub fn transform_matrix(
     transform_coeffs: &[f64],
-    transform_degree: usize,
+    transform_degree: Power,
     from_nvars: usize,
-    degree: usize,
+    degree: Power,
     to_nvars: usize,
 ) -> Vec<f64> {
     let transform_ncoeffs = ncoeffs(from_nvars, transform_degree);
