@@ -500,8 +500,15 @@ type VariablesBits = u8;
 
 type VarData = u8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Variable(VarData);
+
+impl Variable {
+    #[inline]
+    pub fn iter_all() -> impl Iterator<Item = Self> + DoubleEndedIterator + ExactSizeIterator {
+        (0..NVARIABLES as VarData).map(|v| Variable(v))
+    }
+}
 
 impl TryFrom<usize> for Variable {
     type Error = Error;
@@ -520,17 +527,14 @@ impl TryFrom<usize> for Variable {
 pub struct Variables(VariablesBits);
 
 impl Variables {
-    pub fn iter_all() -> impl Iterator<Item = Variable> {
-        (0..NVARIABLES as VarData).into_iter().map(|v| Variable(v))
-    }
     /// Returns the number of variables in the set.
     #[inline]
-    pub const fn len(self) -> usize {
-        let mut rem = self.0;
+    pub fn len(self) -> usize {
         let mut len = 0;
-        while rem != 0 {
-            len += (rem & 1) as usize;
-            rem >>= 1;
+        let mut v = self.0 as usize;
+        for _ in 0..NVARIABLES {
+            len += v & 1;
+            v >>= 1;
         }
         len
     }
@@ -549,20 +553,21 @@ impl Variables {
 
     /// Returns `true` if the variable is in the set.
     #[inline]
-    pub const fn get(self, var: Variable) -> bool {
+    pub const fn contains(self, var: Variable) -> bool {
         (self.0 >> var.0) & 1 == 1
     }
 
     /// Returns the index of the variable in the set or `None` if the variable is not in the set.
     #[inline]
-    pub const fn index(self, var: Variable) -> Option<usize> {
-        if self.get(var) {
+    pub fn index(self, var: Variable) -> Option<usize> {
+        if self.contains(var) {
             Some(Variables(self.0 & !(VariablesBits::MAX << var.0)).len())
         } else {
             None
         }
     }
 
+    #[inline]
     pub const fn first(self) -> Option<Variable> {
         if self.0 == 0 {
             None
@@ -577,6 +582,7 @@ impl Variables {
         }
     }
 
+    #[inline]
     pub const fn last(self) -> Option<Variable> {
         if self.0 == 0 {
             None
@@ -591,10 +597,9 @@ impl Variables {
         }
     }
 
+    #[inline]
     pub fn iter(self) -> impl Iterator<Item = Variable> + DoubleEndedIterator {
-        (0..NVARIABLES as VarData)
-            .map(|i| Variable(i))
-            .filter(move |v| self.get(*v))
+        Variable::iter_all().filter(move |v| self.contains(*v))
     }
 
     /// Returns `true` if all variables in this set are sorted before those in the other set.
@@ -813,7 +818,7 @@ impl Powers {
         let mut index = 0;
         let mut nvars = vars.len();
         for (i, power) in self.iter().enumerate().rev() {
-            if vars.get(Variable(i as VarData)) {
+            if vars.contains(Variable(i as VarData)) {
                 nvars -= 1;
                 degree = degree.checked_sub(power)?;
                 index += ncoeffs_sum(nvars, degree);
@@ -824,7 +829,7 @@ impl Powers {
         Some(index)
     }
     #[inline]
-    pub fn iter(self) -> impl Iterator<Item = Power> + DoubleEndedIterator + ExactSizeIterator {
+    pub fn iter(self) -> std::array::IntoIter<Power, NVARIABLES> {
         unsafe {
             self.vec.into_iter()
         }
@@ -1048,8 +1053,8 @@ pub trait Poly: Sized {
             for (tpowers, tcoeff) in iter::zip(tpowers, target.coeffs.iter_mut()) {
                 let mut tdegree_svars = 0;
                 let mut tdegree_other = 0;
-                for var in Variables::iter_all() {
-                    if svars.get(var) {
+                for var in Variable::iter_all() {
+                    if svars.contains(var) {
                         tdegree_svars += tpowers[var];
                     } else {
                         tdegree_other += tpowers[var];
@@ -1092,8 +1097,8 @@ pub trait Poly: Sized {
             for (tpowers, tcoeff) in iter::zip(tpowers, target.coeffs.iter_mut()) {
                 let mut tdegree_svars = 0;
                 let mut tdegree_other = 0;
-                for var in Variables::iter_all() {
-                    if svars.get(var) {
+                for var in Variable::iter_all() {
+                    if svars.contains(var) {
                         tdegree_svars += tpowers[var];
                     } else {
                         tdegree_other += tpowers[var];
@@ -1386,7 +1391,7 @@ where
 
     #[inline]
     fn vars(&self) -> Variables {
-        if self.poly.degree() <= 1 || !self.poly.vars().get(self.var) {
+        if self.poly.degree() <= 1 || !self.poly.vars().contains(self.var) {
             Variables::empty()
         } else {
             self.poly.vars()
@@ -1395,7 +1400,7 @@ where
 
     #[inline]
     fn degree(&self) -> Power {
-        if self.poly.degree() <= 1 || !self.poly.vars().get(self.var) {
+        if self.poly.degree() <= 1 || !self.poly.vars().contains(self.var) {
             0
         } else {
             self.poly.degree() - 1
@@ -1404,7 +1409,7 @@ where
 
     #[inline]
     fn coeffs_iter(self) -> Self::CoeffsIter {
-        if self.poly.vars().get(self.var) {
+        if self.poly.vars().contains(self.var) {
             // If the degree of `self.poly` is zero, the iterator we return
             // here will be empty, which violates the requirement of `Poly`:
             // the number of coefficients for a polynomial of degree zero is
@@ -2039,7 +2044,12 @@ mod tests {
 mod benches {
     extern crate test;
     use self::test::Bencher;
-    use super::{Poly, PolySequence};
+    use super::{Poly, PolySequence, Variables};
+
+    #[bench]
+    fn variables_len(b: &mut Bencher) {
+        b.iter(|| test::black_box(Variables(0b10110001)).len())
+    }
 
     macro_rules! mk_bench_eval {
         ($name:ident, $degree:literal, $nvars:literal) => {
