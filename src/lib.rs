@@ -71,7 +71,7 @@ pub mod sequence;
 use num_traits::Zero;
 use std::iter;
 use std::ops;
-use crate::sequence::{Sequence, SequenceMut, SequenceIterType};
+use crate::sequence::{Sequence, SequenceMut};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -886,7 +886,7 @@ where
     Coeffs: Sequence<Item = Coeff>,
 {
     type Coeff = &'me Coeff;
-    type CoeffsIter = <Coeffs as SequenceIterType<'me, &'me Coeff>>::Iter;
+    type CoeffsIter = Coeffs::Iter<'me>;
 
     #[inline]
     fn vars(&self) -> Variables {
@@ -909,7 +909,7 @@ where
     Coeffs: Sequence<Item = Coeff>,
 {
     type Coeff = &'me Coeff;
-    type CoeffsIter = <Coeffs as SequenceIterType<'me, &'me Coeff>>::Iter;
+    type CoeffsIter = Coeffs::Iter<'me>;
 
     #[inline]
     fn vars(&self) -> Variables {

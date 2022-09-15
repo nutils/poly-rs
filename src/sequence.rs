@@ -1,16 +1,13 @@
 //! Traits for dynamically sized sequences.
 
-// Workaround for associated type `Iter<'a>: Iterator<Item = &'a T>` of
-// `Sequence` from
-// https://web.archive.org/web/20220530082425/https://sabrinajewson.org/blog/the-better-alternative-to-lifetime-gats#the-better-gats
-
-/// An interface for dynamically sized sequences.
-pub trait Sequence
-where
-    Self: for<'me> SequenceIterType<'me, &'me Self::Item>,
-{
+pub trait SequenceIter {
     /// The type of the elements of the sequence.
     type Item;
+    type Iter<'a>: Iterator<Item = &'a Self::Item> where <Self as SequenceIter>::Item: 'a;
+}
+
+/// An interface for dynamically sized sequences.
+pub trait Sequence: SequenceIter {
 
     /// Returns the number of elements in the sequence.
     fn len(&self) -> usize;
@@ -36,14 +33,16 @@ where
     }
 
     /// Returns an iterator over the sequence.
-    fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter;
+    fn iter(&self) -> Self::Iter<'_>;
+}
+
+pub trait SequenceIterMut: Sequence {
+    type IterMut<'a>: Iterator<Item = &'a mut Self::Item> where <Self as SequenceIter>::Item: 'a;
 }
 
 /// An interface for dynamically sized sequences with mutable elements.
-pub trait SequenceMut: Sequence
-where
-    Self: for<'me> SequenceIterMutType<'me, &'me mut Self::Item>,
-{
+pub trait SequenceMut: Sequence + SequenceIterMut {
+
     /// Returns a mutable reference to an element or `None` if the index is out of bounds.
     fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item>;
 
@@ -80,34 +79,17 @@ where
     }
 
     /// Returns an iterator over the sequence that allows modifying each element.
-    fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut Self::Item>>::IterMut;
-}
-
-/// Return type of [`Sequence::iter()`].
-pub trait SequenceIterType<'me, Item> {
-    /// Return type of [`Sequence::iter()`].
-    type Iter: Iterator<Item = Item>;
-}
-
-/// Return type of [`SequenceMut::iter_mut()`].
-pub trait SequenceIterMutType<'me, Item> {
-    /// Return type of [`SequenceMut::iter_mut()`].
-    type IterMut: Iterator<Item = Item>;
+    fn iter_mut(&mut self) -> Self::IterMut<'_>;
 }
 
 macro_rules! impl_sequence_for_as_ref_slice {
     ($T:ident, $ty:ty, <$($params:tt)*) => {
-        impl<'me, $($params)* SequenceIterType<'me, &'me $T> for $ty {
-            type Iter = std::slice::Iter<'me, $T>;
-        }
-
-        impl<'me, $($params)* SequenceIterMutType<'me, &'me mut $T> for $ty {
-            type IterMut = std::slice::IterMut<'me, $T>;
+        impl<$($params)* SequenceIter for $ty {
+            type Item = $T;
+            type Iter<'a> = std::slice::Iter<'a, $T> where Self::Item: 'a;
         }
 
         impl<$($params)* Sequence for $ty {
-            type Item = $T;
-
             #[inline]
             fn len(&self) -> usize {
                 <Self as AsRef::<[$T]>>::as_ref(self).len()
@@ -117,12 +99,17 @@ macro_rules! impl_sequence_for_as_ref_slice {
                 <Self as AsRef::<[$T]>>::as_ref(self).get(index)
             }
             #[inline]
-            fn iter(&self) -> <Self as SequenceIterType<'_, &$T>>::Iter {
+            fn iter(&self) -> Self::Iter<'_> {
                 <Self as AsRef::<[$T]>>::as_ref(self).iter()
             }
         }
 
+        impl<$($params)* SequenceIterMut for $ty {
+            type IterMut<'a> = std::slice::IterMut<'a, $T> where Self::Item: 'a;
+        }
+
         impl<$($params)* SequenceMut for $ty {
+
             #[inline]
             fn get_mut(&mut self, index: usize) -> Option<&mut $T> {
                 <Self as AsMut::<[$T]>>::as_mut(self).get_mut(index)
@@ -142,7 +129,7 @@ macro_rules! impl_sequence_for_as_ref_slice {
                 <Self as AsMut::<[$T]>>::as_mut(self).fill_with(f);
             }
             #[inline]
-            fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut $T>>::IterMut {
+            fn iter_mut(&mut self) -> Self::IterMut<'_> {
                 <Self as AsMut::<[$T]>>::as_mut(self).iter_mut()
             }
         }
@@ -154,22 +141,12 @@ impl_sequence_for_as_ref_slice! {T, [T; N], <T, const N: usize>}
 impl_sequence_for_as_ref_slice! {T, Vec<T>, <T>}
 impl_sequence_for_as_ref_slice! {T, Box<[T]>, <T>}
 
-impl<'me, T, S: SequenceIterType<'me, &'me T> + ?Sized> SequenceIterType<'me, &'me T> for &S {
-    type Iter = <S as SequenceIterType<'me, &'me T>>::Iter;
-}
-
-impl<'me, T, S: SequenceIterType<'me, &'me T> + ?Sized> SequenceIterType<'me, &'me T> for &mut S {
-    type Iter = <S as SequenceIterType<'me, &'me T>>::Iter;
-}
-
-impl<'me, T, S: SequenceIterMutType<'me, &'me mut T> + ?Sized> SequenceIterMutType<'me, &'me mut T>
-    for &mut S
-{
-    type IterMut = <S as SequenceIterMutType<'me, &'me mut T>>::IterMut;
+impl<S: SequenceIter + ?Sized> SequenceIter for &S {
+    type Item = S::Item;
+    type Iter<'a> = S::Iter<'a> where Self::Item: 'a;
 }
 
 impl<S: Sequence + ?Sized> Sequence for &S {
-    type Item = S::Item;
 
     #[inline]
     fn len(&self) -> usize {
@@ -180,13 +157,17 @@ impl<S: Sequence + ?Sized> Sequence for &S {
         (**self).get(index)
     }
     #[inline]
-    fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
+    fn iter(&self) -> Self::Iter<'_> {
         (**self).iter()
     }
+}
+
+impl<S: SequenceIter + ?Sized> SequenceIter for &mut S {
+    type Item = S::Item;
+    type Iter<'a> = S::Iter<'a> where Self::Item: 'a;
 }
 
 impl<S: Sequence + ?Sized> Sequence for &mut S {
-    type Item = S::Item;
 
     #[inline]
     fn len(&self) -> usize {
@@ -197,12 +178,17 @@ impl<S: Sequence + ?Sized> Sequence for &mut S {
         (**self).get(index)
     }
     #[inline]
-    fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
+    fn iter(&self) -> Self::Iter<'_> {
         (**self).iter()
     }
 }
 
+impl<S: SequenceMut + ?Sized> SequenceIterMut for &mut S {
+    type IterMut<'a> = S::IterMut<'a> where Self::Item: 'a;
+}
+
 impl<S: SequenceMut + ?Sized> SequenceMut for &mut S {
+
     #[inline]
     fn get_mut(&mut self, index: usize) -> Option<&mut Self::Item> {
         (**self).get_mut(index)
@@ -222,28 +208,23 @@ impl<S: SequenceMut + ?Sized> SequenceMut for &mut S {
         (**self).fill_with(f);
     }
     #[inline]
-    fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut Self::Item>>::IterMut {
+    fn iter_mut(&mut self) -> Self::IterMut<'_> {
         (**self).iter_mut()
     }
 }
 
 #[cfg(feature = "ndarray")]
 mod impl_ndarray {
-    use super::{Sequence, SequenceIterMutType, SequenceIterType, SequenceMut};
+    use super::{Sequence, SequenceIterMut, SequenceIter, SequenceMut};
     use ndarray::iter::{Iter, IterMut};
     use ndarray::{ArrayBase, Data, DataMut, Ix1};
 
-    impl<'me, S: Data> SequenceIterType<'me, &'me S::Elem> for ArrayBase<S, Ix1> {
-        type Iter = Iter<'me, S::Elem, Ix1>;
-    }
-
-    impl<'me, S: Data> SequenceIterMutType<'me, &'me mut S::Elem> for ArrayBase<S, Ix1> {
-        type IterMut = IterMut<'me, S::Elem, Ix1>;
+    impl<S: Data> SequenceIter for ArrayBase<S, Ix1> {
+        type Item = S::Elem;
+        type Iter<'a> = Iter<'a, S::Elem, Ix1> where Self::Item: 'a;
     }
 
     impl<S: Data> Sequence for ArrayBase<S, Ix1> {
-        type Item = S::Elem;
-
         #[inline]
         fn len(&self) -> usize {
             self.len()
@@ -253,9 +234,13 @@ mod impl_ndarray {
             self.get(index)
         }
         #[inline]
-        fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter {
+        fn iter(&self) -> Self::Iter<'_> {
             self.iter()
         }
+    }
+
+    impl<S: Data + DataMut> SequenceIterMut for ArrayBase<S, Ix1> {
+        type IterMut<'a> = IterMut<'a, S::Elem, Ix1> where Self::Item: 'a;
     }
 
     impl<S: Data + DataMut> SequenceMut for ArrayBase<S, Ix1> {
@@ -271,7 +256,7 @@ mod impl_ndarray {
             self.fill(value);
         }
         #[inline]
-        fn iter_mut(&mut self) -> <Self as SequenceIterMutType<'_, &mut Self::Item>>::IterMut {
+        fn iter_mut(&mut self) -> Self::IterMut<'_> {
             self.iter_mut()
         }
     }
