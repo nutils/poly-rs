@@ -7,7 +7,12 @@
 //! ```
 //!
 //! where `c` is a vector of coefficients, `x` a vector of `n` variables and
-//! `p` a nonnegative integer degree.
+//! `p` a nonnegative integer degree. For performance reasons `n` is bounded
+//! above by eight.
+//!
+//! This crate provides a [`Poly`] trait defining functions like [`eval`],
+//! evaluate a polynomial, and [`mul`], multiply a polynomial, and several
+//! implementations of which [`PolySequence`] is the most important.
 //!
 //! # Representation
 //!
@@ -69,11 +74,12 @@ use std::ops;
 // `Sequence` from
 // https://web.archive.org/web/20220530082425/https://sabrinajewson.org/blog/the-better-alternative-to-lifetime-gats#the-better-gats
 
-/// An interface for finite sequences.
+/// An interface for dynamically sized sequences.
 pub trait Sequence
 where
     Self: for<'me> SequenceIterType<'me, &'me Self::Item>,
 {
+    /// The type of the elements of the sequence.
     type Item;
 
     /// Returns the number of elements in the sequence.
@@ -103,7 +109,7 @@ where
     fn iter(&self) -> <Self as SequenceIterType<'_, &Self::Item>>::Iter;
 }
 
-/// An interface for finite sequences with mutable elements.
+/// An interface for dynamically sized sequences with mutable elements.
 pub trait SequenceMut: Sequence
 where
     Self: for<'me> SequenceIterMutType<'me, &'me mut Self::Item>,
@@ -125,6 +131,7 @@ where
             .and_then(|index| self.get_mut(index))
     }
 
+    /// Fills `self` with elements by cloning `value`.
     #[inline]
     fn fill(&mut self, value: Self::Item)
     where
@@ -133,14 +140,13 @@ where
         self.fill_with(|| value.clone());
     }
 
+    /// Fills `self` with elements returned by calling a closure repeatedly.
     #[inline]
     fn fill_with<F>(&mut self, mut f: F)
     where
         F: FnMut() -> Self::Item,
     {
-        for v in self.iter_mut() {
-            *v = f();
-        }
+        self.iter_mut().for_each(|v| *v = f());
     }
 
     /// Returns an iterator over the sequence that allows modifying each element.
@@ -500,6 +506,7 @@ type VariablesBits = u8;
 
 type VarData = u8;
 
+/// Variable of a polynomial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Variable(VarData);
 
@@ -830,9 +837,7 @@ impl Powers {
     }
     #[inline]
     pub fn iter(self) -> std::array::IntoIter<Power, NVARIABLES> {
-        unsafe {
-            self.vec.into_iter()
-        }
+        unsafe { self.vec.into_iter() }
     }
     #[inline]
     pub fn iter_vars(self, vars: Variables) -> impl Iterator<Item = Power> {
@@ -849,24 +854,22 @@ impl Powers {
     #[inline]
     pub fn unchecked_add(self, rhs: Powers) -> Self {
         unsafe {
-            Self { int: self.int.overflowing_add(rhs.int).0 }
+            Self {
+                int: self.int.overflowing_add(rhs.int).0,
+            }
         }
     }
 }
 
 impl std::fmt::Debug for Powers {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        unsafe {
-            self.vec.fmt(f)
-        }
+        unsafe { self.vec.fmt(f) }
     }
 }
 
 impl std::cmp::PartialEq for Powers {
     fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            self.int == other.int
-        }
+        unsafe { self.int == other.int }
     }
 }
 
@@ -875,18 +878,14 @@ impl ops::Index<Variable> for Powers {
 
     #[inline]
     fn index(&self, var: Variable) -> &Power {
-        unsafe {
-            &self.vec[var.0 as usize]
-        }
+        unsafe { &self.vec[var.0 as usize] }
     }
 }
 
 impl ops::IndexMut<Variable> for Powers {
     #[inline]
     fn index_mut(&mut self, var: Variable) -> &mut Power {
-        unsafe {
-            &mut self.vec[var.0 as usize]
-        }
+        unsafe { &mut self.vec[var.0 as usize] }
     }
 }
 
@@ -1311,7 +1310,7 @@ where
     #[inline]
     fn coeffs_iter(self) -> Self::CoeffsIter {
         let mut output: PolySequence<Vec<_>> = PolySequence::zeros(self.vars(), self.degree());
-        self.add_to(&mut output).unwrap();
+        let _ = self.add_to(&mut output);
         output.coeffs.into_iter()
     }
 
@@ -1498,7 +1497,9 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     where
         Coeffs: Iterator<Item = Coeff>,
     {
-        self.from_coeff(coeffs.next().unwrap())
+        coeffs
+            .next()
+            .map_or_else(|| self.init_acc(), |coeff| self.from_coeff(coeff))
     }
 
     #[inline]
@@ -1508,9 +1509,10 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
         Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let value = values.get(0).unwrap();
-        for coeff in coeffs.take(degree as usize + 1) {
-            self.update_acc_coeff(&mut acc, coeff, value);
+        if let Some(value) = values.get(0) {
+            for coeff in coeffs.take(degree as usize + 1) {
+                self.update_acc_coeff(&mut acc, coeff, value);
+            }
         }
         acc
     }
@@ -1522,10 +1524,11 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
         Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let value = values.get(1).unwrap();
-        for p in 0..=degree {
-            let inner = self.eval_1d(coeffs, p, values);
-            self.update_acc_inner(&mut acc, inner, value);
+        if let Some(value) = values.get(1) {
+            for p in 0..=degree {
+                let inner = self.eval_1d(coeffs, p, values);
+                self.update_acc_inner(&mut acc, inner, value);
+            }
         }
         acc
     }
@@ -1537,10 +1540,11 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
         Values: Sequence<Item = Value> + ?Sized,
     {
         let mut acc = self.init_acc();
-        let value = values.get(2).unwrap();
-        for p in 0..=degree {
-            let inner = self.eval_2d(coeffs, p, values);
-            self.update_acc_inner(&mut acc, inner, value);
+        if let Some(value) = values.get(2) {
+            for p in 0..=degree {
+                let inner = self.eval_2d(coeffs, p, values);
+                self.update_acc_inner(&mut acc, inner, value);
+            }
         }
         acc
     }
@@ -1561,10 +1565,11 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
             self.eval_3d(coeffs, degree, values)
         } else {
             let mut acc = self.init_acc();
-            let value = values.get(nvars - 1).unwrap();
-            for p in 0..=degree {
-                let inner = self.eval_nd(coeffs, p, values, nvars - 1);
-                self.update_acc_inner(&mut acc, inner, value);
+            if let Some(value) = values.get(nvars - 1) {
+                for p in 0..=degree {
+                    let inner = self.eval_nd(coeffs, p, values, nvars - 1);
+                    self.update_acc_inner(&mut acc, inner, value);
+                }
             }
             acc
         }
@@ -1618,7 +1623,9 @@ where
     #[inline]
     fn from_coeff(&self, coeff: Coeff) -> PolySequence<Vec<OCoeff>> {
         let mut acc: PolySequence<Vec<OCoeff>> = PolySequence::zeros(Variables::empty(), 0);
-        *acc.coeffs.last_mut().unwrap() += coeff;
+        if let Some(acc_coeff) = acc.coeffs.last_mut() {
+            *acc_coeff += coeff;
+        }
         acc
     }
     #[inline]
@@ -1627,14 +1634,20 @@ where
     }
     #[inline]
     fn update_acc_coeff(&self, acc: &mut PolySequence<Vec<OCoeff>>, coeff: Coeff, value: &Value) {
-        if acc.degree() == 0 && acc.coeffs.get(0).unwrap().is_zero() {
-            *acc.coeffs.last_mut().unwrap() += coeff;
-        } else {
-            let mut old_acc =
-                PolySequence::zeros(acc.vars() | value.vars(), acc.degree() + value.degree());
-            std::mem::swap(acc, &mut old_acc);
-            old_acc.mul(value).add_to(acc).unwrap();
-            *acc.coeffs.last_mut().unwrap() += coeff;
+        if acc.degree() == 0 {
+            if let Some(acc_coeff) = acc.coeffs.last_mut() {
+                if acc_coeff.is_zero() {
+                    *acc_coeff += coeff;
+                    return;
+                }
+            }
+        }
+        let mut old_acc =
+            PolySequence::zeros(acc.vars() | value.vars(), acc.degree() + value.degree());
+        std::mem::swap(acc, &mut old_acc);
+        let _ = old_acc.mul(value).add_to(acc);
+        if let Some(acc_coeff) = acc.coeffs.last_mut() {
+            *acc_coeff += coeff;
         }
     }
     #[inline]
@@ -1644,7 +1657,7 @@ where
         mut inner: PolySequence<Vec<OCoeff>>,
         value: &Value,
     ) {
-        if acc.degree() == 0 && acc.coeffs.get(0).unwrap().is_zero() {
+        if acc.degree() == 0 && acc.coeffs.get(0).map_or(false, |c| c.is_zero()) {
             std::mem::swap(acc, &mut inner)
         } else {
             let mut old_acc = PolySequence::zeros(
@@ -1652,8 +1665,8 @@ where
                 std::cmp::max(acc.degree() + value.degree(), inner.degree()),
             );
             std::mem::swap(acc, &mut old_acc);
-            old_acc.mul(value).add_to(acc).unwrap();
-            inner.add_to(acc).unwrap();
+            let _ = old_acc.mul(value).add_to(acc);
+            let _ = inner.add_to(acc);
         }
     }
 }
