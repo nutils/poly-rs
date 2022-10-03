@@ -1,8 +1,9 @@
 use crate::{
-    ncoeffs, DefaultEvalCoeffsIter, Error, EvalCoeffsIter, Power, Powers, PowersIter, Sequence,
-    Variable, Variables,
+    ncoeffs, DefaultEvalCoeffsIter, Error, EvalCoeffsIter, Power, Powers, PowersIter, Variable,
+    Variables,
 };
 use num_traits::Zero;
+use sqnc::RandomAccessSequence;
 use std::iter;
 use std::ops;
 
@@ -104,7 +105,7 @@ pub trait PolyAssignRef: PolyMeta {
         Self::Coeff: Zero + Clone,
         Target: PolyMeta<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut;
 
-    /// Add references to coefficients to the target.
+    /// Add coefficients to the target by reference.
     fn add_ref_to<'a, Target>(&'a self, target: &mut Target) -> Result<(), Error>
     where
         Target: PolyCoeffsMut + PolyCoeffsIterMut,
@@ -116,7 +117,7 @@ pub trait PolyEval<Value>: PolyMeta {
 
     fn eval<Values>(&self, values: &Values) -> Self::Output
     where
-        Values: Sequence<Item = Value> + ?Sized;
+        Values: RandomAccessSequence<Item = Value> + ?Sized;
 }
 
 pub trait PolyPartialDeriv: PolyMeta {
@@ -137,7 +138,7 @@ where
 
     fn eval<Values>(&self, values: &Values) -> Value
     where
-        Values: Sequence<Item = Value> + ?Sized,
+        Values: RandomAccessSequence<Item = Value> + ?Sized,
     {
         // TODO: If vars != 0..self.nvars(), wrap `values` in a `Sequence` that
         // gets the appropriate elements.
