@@ -1,21 +1,22 @@
 use crate::traits::*;
 use crate::{ncoeffs, Error, IntegerMultiple, Mul, PartialDeriv, Power, Variable, Variables};
 use num_traits::Zero;
+use sqnc;
 use sqnc::traits::*;
-use sqnc::SequenceWrapper;
 use std::iter;
 use std::ops;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Poly<Coeffs, CoeffsN> {
-    pub(crate) coeffs: SequenceWrapper<Coeffs, CoeffsN>,
+pub struct Poly<Coeffs> {
+    pub(crate) coeffs: Coeffs,
     vars: Variables,
     degree: Power,
 }
 
-impl<Coeffs, CoeffsN> Poly<Coeffs, CoeffsN>
+impl<Coeff, Coeffs, CoeffsN> Poly<sqnc::Wrapper<Coeffs, CoeffsN>>
 where
-    Coeffs: AsSequence<CoeffsN>,
+    Coeffs: DerefSequence<CoeffsN>,
+    Coeffs::Sequence: SequenceRef<OwnedItem = Coeff>,
 {
     pub fn new<IntoVars>(coeffs: Coeffs, vars: IntoVars, mut degree: Power) -> Result<Self, Error>
     where
@@ -27,7 +28,7 @@ where
             degree = 0;
             vars = Variables::none();
         }
-        if coeffs.as_sequence().len() != ncoeffs(vars.len(), degree) {
+        if coeffs.deref_sqnc().len() != ncoeffs(vars.len(), degree) {
             Err(Error::NCoeffsNVarsDegreeMismatch)
         } else {
             Ok(Self::new_unchecked(coeffs, vars, degree))
@@ -43,16 +44,12 @@ where
             degree,
         }
     }
-}
 
-impl<Coeff, Coeffs, CoeffsN> Poly<Coeffs, CoeffsN>
-where
-    Coeff: Zero,
-    Coeffs: AsSequence<CoeffsN, Item = Coeff> + FromIterator<Coeff>,
-{
     pub fn zeros<IntoVars>(vars: IntoVars, degree: Power) -> Self
     where
         IntoVars: Into<Variables>,
+        Coeff: Zero,
+        Coeffs: FromIterator<Coeff>,
     {
         let vars = vars.into();
         let coeffs = iter::repeat_with(Coeff::zero)
@@ -60,31 +57,24 @@ where
             .collect();
         Self::new_unchecked(coeffs, vars, degree)
     }
-}
 
-impl<Coeff, Coeffs, CoeffsN> Poly<Coeffs, CoeffsN>
-where
-    Coeffs: AsSequence<CoeffsN, Item = Coeff> + FromIterator<Coeff>,
-{
     #[inline]
     pub fn from_iter<Source>(source: Source) -> Self
     where
+        Coeffs: FromIterator<Coeff>,
         Source: PolyMeta<Coeff = Coeff> + PolyIntoCoeffsIter,
     {
         let vars = source.vars();
         let degree = source.degree();
         Self::new_unchecked(source.into_coeffs_iter().collect(), vars, degree)
     }
-}
 
-impl<Coeff, Coeffs, CoeffsN> Poly<Coeffs, CoeffsN>
-where
-    Coeff: Zero + ops::AddAssign,
-    Coeffs: AsMutSequence<CoeffsN, Item = Coeff> + FromIterator<Coeff>,
-    Coeffs::Sequence: RandomAccessSequenceMut + IterableMutSequence,
-{
     pub fn from_assignable<Source>(source: Source) -> Self
     where
+        Coeff: Zero + ops::AddAssign,
+        Coeffs: FromIterator<Coeff> + DerefMutSequence<CoeffsN>,
+        Coeffs::Sequence: SequenceRef<OwnedItem = Coeff> + SequenceRefMut + IndexableMutSequence + IterableMutSequence,
+        sqnc::Wrapper<Coeffs, CoeffsN>: SequenceRef<OwnedItem = Coeff>,
         Source: PolyMeta<Coeff = Coeff> + PolyAssign,
     {
         let mut result = Self::zeros(source.vars(), source.degree());
@@ -93,11 +83,11 @@ where
     }
 }
 
-impl<Coeffs, CoeffsN> PolyMeta for Poly<Coeffs, CoeffsN>
+impl<Coeffs> PolyMeta for Poly<Coeffs>
 where
-    Coeffs: AsSequence<CoeffsN>,
+    Coeffs: SequenceRef,
 {
-    type Coeff = Coeffs::Item;
+    type Coeff = Coeffs::OwnedItem;
 
     #[inline]
     fn vars(&self) -> Variables {
@@ -110,10 +100,9 @@ where
     }
 }
 
-impl<Coeffs, CoeffsN> PolyCoeffs for Poly<Coeffs, CoeffsN>
+impl<Coeffs> PolyCoeffs for Poly<Coeffs>
 where
-    Coeffs: AsSequence<CoeffsN>,
-    Coeffs::Sequence: RandomAccessSequence,
+    Coeffs: SequenceRef + IndexableSequence,
 {
     #[inline]
     fn coeff(&self, index: usize) -> Option<&Self::Coeff> {
@@ -121,10 +110,9 @@ where
     }
 }
 
-impl<Coeffs, CoeffsN> PolyCoeffsMut for Poly<Coeffs, CoeffsN>
+impl<Coeffs> PolyCoeffsMut for Poly<Coeffs>
 where
-    Coeffs: AsMutSequence<CoeffsN>,
-    Coeffs::Sequence: RandomAccessSequenceMut,
+    Coeffs: SequenceRefMut + IndexableMutSequence,
 {
     #[inline]
     fn coeff_mut(&mut self, index: usize) -> Option<&mut Self::Coeff> {
@@ -132,12 +120,11 @@ where
     }
 }
 
-impl<Coeffs, CoeffsN> PolyCoeffsIter for Poly<Coeffs, CoeffsN>
+impl<Coeffs> PolyCoeffsIter for Poly<Coeffs>
 where
-    Coeffs: AsSequence<CoeffsN>,
-    Coeffs::Sequence: RandomAccessSequence + IterableSequence,
+    Coeffs: SequenceRef + IterableSequence,
 {
-    type CoeffsIter<'a> = <Coeffs::Sequence as IterableSequence>::Iter<'a> where Self: 'a;
+    type CoeffsIter<'a> = <Coeffs as SequenceIter<'a>>::Iter where Self: 'a;
 
     #[inline]
     fn coeffs_iter(&self) -> Self::CoeffsIter<'_> {
@@ -145,12 +132,11 @@ where
     }
 }
 
-impl<Coeffs, CoeffsN> PolyCoeffsIterMut for Poly<Coeffs, CoeffsN>
+impl<Coeffs> PolyCoeffsIterMut for Poly<Coeffs>
 where
-    Coeffs: AsMutSequence<CoeffsN>,
-    Coeffs::Sequence: RandomAccessSequenceMut + IterableMutSequence,
+    Coeffs: SequenceRefMut + IterableMutSequence,
 {
-    type CoeffsIterMut<'a> = <Coeffs::Sequence as IterableMutSequence>::IterMut<'a> where Self: 'a;
+    type CoeffsIterMut<'a> = <Coeffs as SequenceIterMut<'a>>::IterMut where Self: 'a;
 
     #[inline]
     fn coeffs_iter_mut(&mut self) -> Self::CoeffsIterMut<'_> {
@@ -158,26 +144,24 @@ where
     }
 }
 
-impl<Coeff, Coeffs, CoeffsN> PolyIntoCoeffsIter for Poly<Coeffs, CoeffsN>
+impl<Coeff, Coeffs> PolyIntoCoeffsIter for Poly<Coeffs>
 where
-    Coeffs: AsSequence<CoeffsN, Item = Coeff> + IntoIterator<Item = Coeff>,
-    Coeffs::Sequence: RandomAccessSequence,
+    Coeffs: SequenceRef<OwnedItem = Coeff> + IntoIterator<Item = Coeff>,
 {
     type IntoCoeffsIter = Coeffs::IntoIter;
 
     #[inline]
     fn into_coeffs_iter(self) -> Self::IntoCoeffsIter {
-        self.coeffs.into_inner().into_iter()
+        self.coeffs.into_iter()
     }
 }
 
-impl<Coeff, Coeffs, CoeffsN, PDCoeff> PolyPartialDeriv for Poly<Coeffs, CoeffsN>
+impl<Coeff, Coeffs, PDCoeff> PolyPartialDeriv for Poly<Coeffs>
 where
-    Coeffs: AsSequence<CoeffsN, Item = Coeff>,
-    Coeffs::Sequence: RandomAccessSequence + IterableSequence,
     Coeff: IntegerMultiple<Output = PDCoeff>,
     for<'coeff> &'coeff Coeff: IntegerMultiple<Output = PDCoeff>,
     PDCoeff: Zero,
+    Coeffs: SequenceRef<OwnedItem = Coeff> + IndexableSequence + IterableSequence,
 {
     type PartialDeriv<'a> = PartialDeriv<&'a Self, Self> where Self: 'a;
 
@@ -187,12 +171,7 @@ where
     }
 }
 
-impl<'l, 'r, LCoeffs, LCoeffsN, RPoly> ops::Mul<&'r RPoly> for &'l Poly<LCoeffs, LCoeffsN>
-where
-    LCoeffs: AsSequence<LCoeffsN>,
-    LCoeffs::Sequence: RandomAccessSequence + IterableSequence,
-    RPoly: PolyCoeffsIter,
-{
+impl<'l, 'r, LCoeffs, RPoly> ops::Mul<&'r RPoly> for &'l Poly<LCoeffs> {
     type Output = Mul<Self, &'r RPoly>;
 
     fn mul(self, rhs: &'r RPoly) -> Self::Output {

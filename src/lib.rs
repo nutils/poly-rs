@@ -79,7 +79,7 @@ pub use power::{Power, Powers, PowersIter};
 pub use variable::{Variable, Variables};
 
 use num_traits::Zero;
-use sqnc::RandomAccessSequence;
+use sqnc::{SequenceRef, IndexableSequence, IndexableMutSequence};
 use std::borrow::Borrow;
 use std::iter;
 use std::marker::PhantomData;
@@ -391,7 +391,7 @@ where
 impl<OwnedParent, Coeff> PolyIntoCoeffsIter for PartialDeriv<OwnedParent, OwnedParent>
 where
     OwnedParent: PolyMeta + PolyIntoCoeffsIter,
-    OwnedParent::Coeff: IntegerMultiple<Output = Coeff>,
+    OwnedParent::Coeff: IntegerMultiple<Output = Coeff> + Sized,
     Coeff: Zero,
 {
     type IntoCoeffsIter = PartialDerivCoeffsIter<OwnedParent::IntoCoeffsIter>;
@@ -464,7 +464,11 @@ where
     }
 }
 
-impl<P: PolyIntoCoeffsIter> PolyAssign for P {
+impl<P> PolyAssign for P
+where
+    P: PolyIntoCoeffsIter,
+    P::Coeff: Sized,
+{
     fn assign_to<Target>(self, target: &mut Target) -> Result<(), Error>
     where
         Self::Coeff: Zero,
@@ -620,7 +624,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     ) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         match values.len() {
             0 => self.eval_0d(coeffs),
@@ -645,7 +649,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     fn eval_1d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         let mut acc = self.init_acc();
         if let Some(value) = values.get(0) {
@@ -660,7 +664,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     fn eval_2d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         let mut acc = self.init_acc();
         if let Some(value) = values.get(1) {
@@ -676,7 +680,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     fn eval_3d<Coeffs, Values>(&self, coeffs: &mut Coeffs, degree: Power, values: &Values) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         let mut acc = self.init_acc();
         if let Some(value) = values.get(2) {
@@ -698,7 +702,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     ) -> Output
     where
         Coeffs: Iterator<Item = Coeff>,
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         if nvars == 3 {
             self.eval_3d(coeffs, degree, values)
@@ -746,7 +750,9 @@ where
 
 struct EvalCompositionCoeffsIter;
 
-impl<Value, Coeff, OCoeff> EvalCoeffsIter<Value, Coeff, Poly<Vec<OCoeff>, ((),)>>
+type PolyVec<Coeff> = Poly<sqnc::Wrapper<Vec<Coeff>, ((),)>>;
+
+impl<Value, Coeff, OCoeff> EvalCoeffsIter<Value, Coeff, PolyVec<OCoeff>>
     for EvalCompositionCoeffsIter
 where
     Value: PolyCoeffsIter,
@@ -755,19 +761,19 @@ where
     OCoeff: Zero + ops::AddAssign + ops::AddAssign<Coeff>,
 {
     #[inline]
-    fn init_acc_coeff(&self, coeff: Coeff) -> Poly<Vec<OCoeff>, ((),)> {
-        let mut acc: Poly<Vec<OCoeff>, ((),)> = Poly::zeros(Variables::none(), 0);
+    fn init_acc_coeff(&self, coeff: Coeff) -> PolyVec<OCoeff> {
+        let mut acc: PolyVec<OCoeff> = Poly::zeros(Variables::none(), 0);
         if let Some(acc_coeff) = acc.coeffs.last_mut() {
             *acc_coeff += coeff;
         }
         acc
     }
     #[inline]
-    fn init_acc(&self) -> Poly<Vec<OCoeff>, ((),)> {
+    fn init_acc(&self) -> PolyVec<OCoeff> {
         Poly::zeros(Variables::none(), 0)
     }
     #[inline]
-    fn update_acc_coeff(&self, acc: &mut Poly<Vec<OCoeff>, ((),)>, coeff: Coeff, value: &Value) {
+    fn update_acc_coeff(&self, acc: &mut PolyVec<OCoeff>, coeff: Coeff, value: &Value) {
         if acc.degree() == 0 {
             if let Some(acc_coeff) = acc.coeffs.last_mut() {
                 if acc_coeff.is_zero() {
@@ -786,8 +792,8 @@ where
     #[inline]
     fn update_acc_inner(
         &self,
-        acc: &mut Poly<Vec<OCoeff>, ((),)>,
-        mut inner: Poly<Vec<OCoeff>, ((),)>,
+        acc: &mut PolyVec<OCoeff>,
+        mut inner: PolyVec<OCoeff>,
         value: &Value,
     ) {
         if acc.degree() == 0 && acc.coeffs.get(0).map_or(false, |c| c.is_zero()) {
@@ -833,7 +839,7 @@ pub fn transform_matrix(
     let outer_vars = Variables::from(..to_nvars);
     let transform_polys: Vec<_> = transform_coeffs
         .chunks_exact(transform_ncoeffs)
-        .map(|c| Poly::<&[f64], ((),)>::new_unchecked(c, inner_vars, transform_degree))
+        .map(|c| Poly::<sqnc::Wrapper<&[f64], ((),)>>::new_unchecked(c, inner_vars, transform_degree))
         .collect();
 
     let nrows = ncoeffs(from_nvars, row_degree);
@@ -843,7 +849,7 @@ pub fn transform_matrix(
 
     for (i, col) in matrix.chunks_exact_mut(nrows).enumerate() {
         let mut col = Poly::new_unchecked(col, inner_vars, row_degree);
-        let mut outer: Poly<Vec<f64>, ((),)> = Poly::zeros(outer_vars, degree);
+        let mut outer: PolyVec<f64> = Poly::zeros(outer_vars, degree);
         *outer.coeffs.get_mut(i).unwrap() = 1.0;
         EvalCompositionCoeffsIter
             .eval_iter(

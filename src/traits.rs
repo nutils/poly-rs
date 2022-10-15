@@ -3,12 +3,12 @@ use crate::{
     Variables,
 };
 use num_traits::Zero;
-use sqnc::RandomAccessSequence;
+use sqnc::{SequenceRef, IndexableSequence};
 use std::iter;
 use std::ops;
 
 pub trait PolyMeta {
-    type Coeff;
+    type Coeff: ?Sized;
 
     fn vars(&self) -> Variables;
     fn degree(&self) -> Power;
@@ -67,6 +67,7 @@ pub trait PolyCoeffsIterMut: PolyMeta {
 pub trait PolyIntoCoeffsIter: PolyMeta
 where
     Self: Sized,
+    Self::Coeff: Sized,
 {
     type IntoCoeffsIter: Iterator<Item = Self::Coeff>;
 
@@ -95,7 +96,8 @@ where
     fn add_to<Target>(self, target: &mut Target) -> Result<(), Error>
     where
         Target: PolyCoeffsMut + PolyCoeffsIterMut,
-        Target::Coeff: ops::AddAssign<Self::Coeff>;
+        Target::Coeff: ops::AddAssign<Self::Coeff>,
+        Self::Coeff: Sized;
 }
 
 pub trait PolyAssignRef: PolyMeta {
@@ -117,7 +119,7 @@ pub trait PolyEval<Value>: PolyMeta {
 
     fn eval<Values>(&self, values: &Values) -> Self::Output
     where
-        Values: RandomAccessSequence<Item = Value> + ?Sized;
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized;
 }
 
 pub trait PolyPartialDeriv: PolyMeta {
@@ -138,7 +140,7 @@ where
 
     fn eval<Values>(&self, values: &Values) -> Value
     where
-        Values: RandomAccessSequence<Item = Value> + ?Sized,
+        Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized,
     {
         // TODO: If vars != 0..self.nvars(), wrap `values` in a `Sequence` that
         // gets the appropriate elements.

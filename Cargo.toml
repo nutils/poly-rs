@@ -1,6 +1,6 @@
 [package]
 name = "nutils-poly"
-version = "1.0.0"
+version = "1.0.0-dev"
 authors = ["Evalf <info@evalf.com>"]
 edition = "2021"
 license = "MIT"
