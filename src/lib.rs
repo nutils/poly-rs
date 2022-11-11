@@ -34,19 +34,19 @@
 //! `[1, -1, 2]`.
 //!
 //! ```
-//! use nutils_poly::{Poly, Variable, Variables, traits::*};
+//! use nutils_poly::{ExplicitPoly, Variable, Variables, traits::*};
 //!
 //! let x = Variable::new(0).unwrap();
-//! let p = Poly::new([1, -1, 2], x, 2).unwrap();
+//! let p = ExplicitPoly::new([1, -1, 2], x, 2).unwrap();
 //! ```
 //!
 //! You can evaluate this polynomial for some `x` using [`PolySequence::eval()`]:
 //!
 //! ```
-//! # use nutils_poly::{Poly, Variable, Variables, traits::*};
+//! # use nutils_poly::{ExplicitPoly, Variable, Variables, traits::*};
 //! #
 //! # let x = Variable::new(0).unwrap();
-//! # let p = Poly::new([1, -1, 2], x, 2).unwrap();
+//! # let p = ExplicitPoly::new([1, -1, 2], x, 2).unwrap();
 //! assert_eq!(p.eval(&[0]), 2); // x = [0]
 //! assert_eq!(p.eval(&[1]), 2); // x = [1]
 //! assert_eq!(p.eval(&[2]), 4); // x = [2]
@@ -55,13 +55,13 @@
 //! Or compute the partial derivative `∂p/∂x` using [`PartialDeriv::partial_deriv()`]:
 //!
 //! ```
-//! # use nutils_poly::{Poly, Variable, Variables, traits::*};
+//! # use nutils_poly::{ExplicitPoly, Variable, Variables, traits::*};
 //! #
 //! # let x = Variable::new(0).unwrap();
-//! # let p = Poly::new([1, -1, 2], x, 2).unwrap();
+//! # let p = ExplicitPoly::new([1, -1, 2], x, 2).unwrap();
 //! assert_eq!(
-//!     Poly::from_iter(p.partial_deriv(Variable::new(0).unwrap())),
-//!     Poly::new(vec![2, -1], x, 1).unwrap(),
+//!     ExplicitPoly::from_iter(p.partial_deriv(Variable::new(0).unwrap())),
+//!     ExplicitPoly::new(vec![2, -1], x, 1).unwrap(),
 //! );
 //! ```
 //!
@@ -69,12 +69,12 @@
 
 #![cfg_attr(feature = "bench", feature(test))]
 
-mod poly;
+mod explicit;
 mod power;
 pub mod traits;
 mod variable;
 
-pub use poly::Poly;
+pub use explicit::ExplicitPoly;
 pub use power::{Power, Powers, PowersIter};
 pub use variable::{Variable, Variables};
 
@@ -204,10 +204,10 @@ use crate::traits::*;
 
 pub struct Mul<L, R>(L, R);
 
-impl<'l, 'r, L, R, OCoeff> PolyMeta for Mul<&'l L, &'r R>
+impl<'l, 'r, L, R, OCoeff> Poly for Mul<&'l L, &'r R>
 where
-    L: PolyMeta,
-    R: PolyMeta,
+    L: Poly,
+    R: Poly,
     &'l L::Coeff: ops::Mul<&'r R::Coeff, Output = OCoeff>,
 {
     type Coeff = OCoeff;
@@ -234,7 +234,7 @@ where
     fn assign_to<Target>(self, target: &mut Target) -> Result<(), Error>
     where
         OCoeff: Zero,
-        Target: PolyMeta<Coeff = OCoeff> + PolyCoeffsMut + PolyCoeffsIterMut,
+        Target: Poly<Coeff = OCoeff> + PolyCoeffsMut + PolyCoeffsIterMut,
     {
         target
             .coeffs_iter_mut()
@@ -295,7 +295,7 @@ where
 //    fn assign_to<Target>(self, target: &mut Target) -> Result<(), Error>
 //    where
 //        OCoeff: Zero,
-//        Target: PolyMeta<Coeff = OCoeff> + PolyCoeffsMut + PolyCoeffsIterMut,
+//        Target: Poly<Coeff = OCoeff> + PolyCoeffsMut + PolyCoeffsIterMut,
 //    {
 //        target
 //            .coeffs_iter_mut()
@@ -361,10 +361,10 @@ impl<Parent, OwnedParent> PartialDeriv<Parent, OwnedParent> {
     }
 }
 
-impl<Parent, OwnedParent, Coeff> PolyMeta for PartialDeriv<Parent, OwnedParent>
+impl<Parent, OwnedParent, Coeff> Poly for PartialDeriv<Parent, OwnedParent>
 where
     Parent: Borrow<OwnedParent>,
-    OwnedParent: PolyMeta,
+    OwnedParent: Poly,
     OwnedParent::Coeff: IntegerMultiple<Output = Coeff>,
 {
     type Coeff = Coeff;
@@ -390,7 +390,7 @@ where
 
 impl<OwnedParent, Coeff> PolyIntoCoeffsIter for PartialDeriv<OwnedParent, OwnedParent>
 where
-    OwnedParent: PolyMeta + PolyIntoCoeffsIter,
+    OwnedParent: Poly + PolyIntoCoeffsIter,
     OwnedParent::Coeff: IntegerMultiple<Output = Coeff> + Sized,
     Coeff: Zero,
 {
@@ -399,9 +399,9 @@ where
     fn into_coeffs_iter(self) -> Self::IntoCoeffsIter {
         if self.parent.vars().contains(self.var) {
             // If the degree of `self.parent` is zero, the iterator we return
-            // here will be empty, which violates the requirement of `PolyMeta`:
+            // here will be empty, which violates the requirement of `Poly`:
             // the number of coefficients for a polynomial of degree zero is
-            // one. However, since the `PolyMeta::vars()` should be empty for a
+            // one. However, since the `Poly::vars()` should be empty for a
             // polynomial of degree zero, this situation cannot occur.
             PartialDerivCoeffsIter::NonZero(self.parent.into_coeffs_iter_with_powers(), self.var)
         } else {
@@ -413,7 +413,7 @@ where
 impl<'parent, OwnedParent, Coeff> PolyIntoCoeffsIter
     for PartialDeriv<&'parent OwnedParent, OwnedParent>
 where
-    OwnedParent: PolyMeta + PolyCoeffsIter,
+    OwnedParent: Poly + PolyCoeffsIter,
     OwnedParent::Coeff: IntegerMultiple<Output = Coeff>,
     for<'coeff> &'coeff OwnedParent::Coeff: IntegerMultiple<Output = Coeff>,
     Coeff: Zero,
@@ -423,9 +423,9 @@ where
     fn into_coeffs_iter(self) -> Self::IntoCoeffsIter {
         if self.parent.vars().contains(self.var) {
             // If the degree of `self.parent` is zero, the iterator we return
-            // here will be empty, which violates the requirement of `PolyMeta`:
+            // here will be empty, which violates the requirement of `Poly`:
             // the number of coefficients for a polynomial of degree zero is
-            // one. However, since the `PolyMeta::vars()` should be empty for a
+            // one. However, since the `Poly::vars()` should be empty for a
             // polynomial of degree zero, this situation cannot occur.
             PartialDerivCoeffsIter::NonZero(self.parent.coeffs_iter_with_powers(), self.var)
         } else {
@@ -472,7 +472,7 @@ where
     fn assign_to<Target>(self, target: &mut Target) -> Result<(), Error>
     where
         Self::Coeff: Zero,
-        Target: PolyMeta<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut,
+        Target: Poly<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut,
     {
         let svars = self.vars();
         let sdegree = self.degree();
@@ -537,7 +537,7 @@ impl<P: PolyCoeffsIter> PolyAssignRef for P {
     fn assign_clone_to<Target>(&self, target: &mut Target) -> Result<(), Error>
     where
         Self::Coeff: Zero + Clone,
-        Target: PolyMeta<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut,
+        Target: Poly<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut,
     {
         let svars = self.vars();
         let sdegree = self.degree();
@@ -607,7 +607,7 @@ trait EvalCoeffsIter<Value, Coeff, Output> {
     //#[inline]
     //fn eval<P, Values>(&self, poly: &P, values: &Values) -> Output
     //where
-    //    P: PolyMeta<Coeff = Coeff> + PolyCoeffsIter,
+    //    P: Poly<Coeff = Coeff> + PolyCoeffsIter,
     //    Values: Sequence<Item = Value> + ?Sized,
     //{
     //    assert!(values.len() >= poly.nvars());
@@ -750,7 +750,7 @@ where
 
 struct EvalCompositionCoeffsIter;
 
-type PolyVec<Coeff> = Poly<sqnc::Wrapper<Vec<Coeff>, ((),)>>;
+type PolyVec<Coeff> = ExplicitPoly<sqnc::Wrapper<Vec<Coeff>, ((),)>>;
 
 impl<Value, Coeff, OCoeff> EvalCoeffsIter<Value, Coeff, PolyVec<OCoeff>>
     for EvalCompositionCoeffsIter
@@ -762,7 +762,7 @@ where
 {
     #[inline]
     fn init_acc_coeff(&self, coeff: Coeff) -> PolyVec<OCoeff> {
-        let mut acc: PolyVec<OCoeff> = Poly::zeros(Variables::none(), 0);
+        let mut acc: PolyVec<OCoeff> = ExplicitPoly::zeros(Variables::none(), 0);
         if let Some(acc_coeff) = acc.coeffs.last_mut() {
             *acc_coeff += coeff;
         }
@@ -770,7 +770,7 @@ where
     }
     #[inline]
     fn init_acc(&self) -> PolyVec<OCoeff> {
-        Poly::zeros(Variables::none(), 0)
+        ExplicitPoly::zeros(Variables::none(), 0)
     }
     #[inline]
     fn update_acc_coeff(&self, acc: &mut PolyVec<OCoeff>, coeff: Coeff, value: &Value) {
@@ -782,7 +782,7 @@ where
                 }
             }
         }
-        let mut old_acc = Poly::zeros(acc.vars() | value.vars(), acc.degree() + value.degree());
+        let mut old_acc = ExplicitPoly::zeros(acc.vars() | value.vars(), acc.degree() + value.degree());
         std::mem::swap(acc, &mut old_acc);
         let _ = (&old_acc * value).add_to(acc);
         if let Some(acc_coeff) = acc.coeffs.last_mut() {
@@ -799,7 +799,7 @@ where
         if acc.degree() == 0 && acc.coeffs.get(0).map_or(false, |c| c.is_zero()) {
             std::mem::swap(acc, &mut inner)
         } else {
-            let mut old_acc = Poly::zeros(
+            let mut old_acc = ExplicitPoly::zeros(
                 acc.vars() | inner.vars() | value.vars(),
                 std::cmp::max(acc.degree() + value.degree(), inner.degree()),
             );
@@ -839,7 +839,7 @@ pub fn transform_matrix(
     let outer_vars = Variables::from(..to_nvars);
     let transform_polys: Vec<_> = transform_coeffs
         .chunks_exact(transform_ncoeffs)
-        .map(|c| Poly::<sqnc::Wrapper<&[f64], ((),)>>::new_unchecked(c, inner_vars, transform_degree))
+        .map(|c| ExplicitPoly::<sqnc::Wrapper<&[f64], ((),)>>::new_unchecked(c, inner_vars, transform_degree))
         .collect();
 
     let nrows = ncoeffs(from_nvars, row_degree);
@@ -848,8 +848,8 @@ pub fn transform_matrix(
     matrix.resize(nrows * ncols, 0.0);
 
     for (i, col) in matrix.chunks_exact_mut(nrows).enumerate() {
-        let mut col = Poly::new_unchecked(col, inner_vars, row_degree);
-        let mut outer: PolyVec<f64> = Poly::zeros(outer_vars, degree);
+        let mut col = ExplicitPoly::new_unchecked(col, inner_vars, row_degree);
+        let mut outer: PolyVec<f64> = ExplicitPoly::zeros(outer_vars, degree);
         *outer.coeffs.get_mut(i).unwrap() = 1.0;
         EvalCompositionCoeffsIter
             .eval_iter(
@@ -866,7 +866,7 @@ pub fn transform_matrix(
 
 #[cfg(test)]
 mod tests {
-    use super::{Poly, Powers, Variable, Variables};
+    use super::{ExplicitPoly, Powers, Variable, Variables};
     use crate::traits::*;
     use approx::assert_abs_diff_eq;
     use std::iter;
@@ -956,25 +956,25 @@ mod tests {
 
     #[test]
     fn eval_0d() {
-        assert_eq!(Poly::new([1], v![], 0).unwrap().eval(&[] as &[usize]), 1);
+        assert_eq!(ExplicitPoly::new([1], v![], 0).unwrap().eval(&[] as &[usize]), 1);
     }
 
     #[test]
     fn eval_1d() {
-        assert_eq!(Poly::new([1], v![0], 0).unwrap().eval(&[5]), 1);
-        assert_eq!(Poly::new([2, 1], v![0], 1).unwrap().eval(&[5]), 11);
-        assert_eq!(Poly::new([3, 2, 1], v![0], 2).unwrap().eval(&[5]), 86);
+        assert_eq!(ExplicitPoly::new([1], v![0], 0).unwrap().eval(&[5]), 1);
+        assert_eq!(ExplicitPoly::new([2, 1], v![0], 1).unwrap().eval(&[5]), 11);
+        assert_eq!(ExplicitPoly::new([3, 2, 1], v![0], 2).unwrap().eval(&[5]), 86);
     }
 
     #[test]
     fn eval_2d() {
-        assert_eq!(Poly::new([1], v![0, 1], 0).unwrap().eval(&[5, 3]), 1);
-        assert_eq!(Poly::new([0, 0, 1], v![0, 1], 1).unwrap().eval(&[5, 3]), 1);
-        assert_eq!(Poly::new([0, 1, 0], v![0, 1], 1).unwrap().eval(&[5, 3]), 5);
-        assert_eq!(Poly::new([1, 0, 0], v![0, 1], 1).unwrap().eval(&[5, 3]), 3);
-        assert_eq!(Poly::new([3, 2, 1], v![0, 1], 1).unwrap().eval(&[5, 3]), 20);
+        assert_eq!(ExplicitPoly::new([1], v![0, 1], 0).unwrap().eval(&[5, 3]), 1);
+        assert_eq!(ExplicitPoly::new([0, 0, 1], v![0, 1], 1).unwrap().eval(&[5, 3]), 1);
+        assert_eq!(ExplicitPoly::new([0, 1, 0], v![0, 1], 1).unwrap().eval(&[5, 3]), 5);
+        assert_eq!(ExplicitPoly::new([1, 0, 0], v![0, 1], 1).unwrap().eval(&[5, 3]), 3);
+        assert_eq!(ExplicitPoly::new([3, 2, 1], v![0, 1], 1).unwrap().eval(&[5, 3]), 20);
         assert_eq!(
-            Poly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
+            ExplicitPoly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
                 .unwrap()
                 .eval(&[5, 3]),
             227
@@ -983,39 +983,39 @@ mod tests {
 
     #[test]
     fn eval_3d() {
-        assert_eq!(Poly::new([1], v![0, 1, 2], 0).unwrap().eval(&[5, 3, 2]), 1);
+        assert_eq!(ExplicitPoly::new([1], v![0, 1, 2], 0).unwrap().eval(&[5, 3, 2]), 1);
         assert_eq!(
-            Poly::new([0, 0, 0, 1], v![0, 1, 2], 1)
+            ExplicitPoly::new([0, 0, 0, 1], v![0, 1, 2], 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             1
         );
         assert_eq!(
-            Poly::new([0, 0, 1, 0], v![0, 1, 2], 1)
+            ExplicitPoly::new([0, 0, 1, 0], v![0, 1, 2], 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             5
         );
         assert_eq!(
-            Poly::new([0, 1, 0, 0], v![0, 1, 2], 1)
+            ExplicitPoly::new([0, 1, 0, 0], v![0, 1, 2], 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             3
         );
         assert_eq!(
-            Poly::new([1, 0, 0, 0], v![0, 1, 2], 1)
+            ExplicitPoly::new([1, 0, 0, 0], v![0, 1, 2], 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             2
         );
         assert_eq!(
-            Poly::new([4, 3, 2, 1], v![0, 1, 2], 1)
+            ExplicitPoly::new([4, 3, 2, 1], v![0, 1, 2], 1)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             28
         );
         assert_eq!(
-            Poly::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], v![0, 1, 2], 2)
+            ExplicitPoly::new([10, 9, 8, 7, 6, 5, 4, 3, 2, 1], v![0, 1, 2], 2)
                 .unwrap()
                 .eval(&[5, 3, 2]),
             415,
@@ -1025,67 +1025,67 @@ mod tests {
     #[test]
     fn eval_ref() {
         let coeffs: Vec<usize> = vec![3, 2, 1];
-        let poly = Poly::new(&coeffs, v![0], 2).unwrap();
+        let poly = ExplicitPoly::new(&coeffs, v![0], 2).unwrap();
         assert_eq!(poly.eval(&[5]), 86);
     }
 
     #[test]
     fn partial_deriv() {
         assert_eq!(
-            Poly::from_assignable(Poly::new([1], v![0], 0).unwrap().partial_deriv(v!(0))),
-            Poly::new(vec![0], v![0], 0).unwrap(),
+            ExplicitPoly::from_assignable(ExplicitPoly::new([1], v![0], 0).unwrap().partial_deriv(v!(0))),
+            ExplicitPoly::new(vec![0], v![0], 0).unwrap(),
         );
         assert_eq!(
-            Poly::from_assignable(Poly::new([2, 1], v![0], 1).unwrap().partial_deriv(v!(0))),
-            Poly::new(vec![2], v![0], 0).unwrap(),
+            ExplicitPoly::from_assignable(ExplicitPoly::new([2, 1], v![0], 1).unwrap().partial_deriv(v!(0))),
+            ExplicitPoly::new(vec![2], v![0], 0).unwrap(),
         );
         assert_eq!(
-            Poly::from_assignable(
-                Poly::new([4, 3, 2, 1], v![0], 3)
+            ExplicitPoly::from_assignable(
+                ExplicitPoly::new([4, 3, 2, 1], v![0], 3)
                     .unwrap()
                     .partial_deriv(v!(0))
             ),
-            Poly::new(vec![12, 6, 2], v![0], 2).unwrap(),
+            ExplicitPoly::new(vec![12, 6, 2], v![0], 2).unwrap(),
         );
         assert_eq!(
-            Poly::from_assignable(
-                Poly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
+            ExplicitPoly::from_assignable(
+                ExplicitPoly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
                     .unwrap()
                     .partial_deriv(v!(0))
             ),
-            Poly::new(vec![5, 6, 2], v![0, 1], 1).unwrap(),
+            ExplicitPoly::new(vec![5, 6, 2], v![0, 1], 1).unwrap(),
         );
         assert_eq!(
-            Poly::from_assignable(
-                Poly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
+            ExplicitPoly::from_assignable(
+                ExplicitPoly::new([6, 5, 4, 3, 2, 1], v![0, 1], 2)
                     .unwrap()
                     .partial_deriv(v!(1))
             ),
-            Poly::new(vec![12, 5, 4], v![0, 1], 1).unwrap(),
+            ExplicitPoly::new(vec![12, 5, 4], v![0, 1], 1).unwrap(),
         );
     }
 
     #[test]
     fn mul() {
-        let l = Poly::new([2], v![0], 0).unwrap();
-        let r = Poly::new([3], v![0], 0).unwrap();
+        let l = ExplicitPoly::new([2], v![0], 0).unwrap();
+        let r = ExplicitPoly::new([3], v![0], 0).unwrap();
         assert_eq!(
-            Poly::from_assignable(&l * &r),
-            Poly::new(vec![6], v![0], 0).unwrap(),
+            ExplicitPoly::from_assignable(&l * &r),
+            ExplicitPoly::new(vec![6], v![0], 0).unwrap(),
         );
 
-        let l = Poly::new([2, 1], v![0], 1).unwrap();
-        let r = Poly::new([4, 3], v![0], 1).unwrap();
+        let l = ExplicitPoly::new([2, 1], v![0], 1).unwrap();
+        let r = ExplicitPoly::new([4, 3], v![0], 1).unwrap();
         assert_eq!(
-            Poly::from_assignable(&l * &r),
-            Poly::new(vec![8, 10, 3], v![0], 2).unwrap(),
+            ExplicitPoly::from_assignable(&l * &r),
+            ExplicitPoly::new(vec![8, 10, 3], v![0], 2).unwrap(),
         );
 
-        let l = Poly::new([3, 2, 1], v![0, 1], 1).unwrap();
-        let r = Poly::new([6, 5, 4], v![0, 1], 1).unwrap();
+        let l = ExplicitPoly::new([3, 2, 1], v![0, 1], 1).unwrap();
+        let r = ExplicitPoly::new([6, 5, 4], v![0, 1], 1).unwrap();
         assert_eq!(
-            Poly::from_assignable(&l * &r),
-            Poly::new(vec![18, 27, 18, 10, 13, 4], v![0, 1], 2).unwrap(),
+            ExplicitPoly::from_assignable(&l * &r),
+            ExplicitPoly::new(vec![18, 27, 18, 10, 13, 4], v![0, 1], 2).unwrap(),
         );
     }
 
@@ -1181,7 +1181,7 @@ mod tests {
 mod benches {
     extern crate test;
     use self::test::Bencher;
-    use super::{traits::*, Poly, Variable, Variables};
+    use super::{traits::*, ExplicitPoly, Variable, Variables};
 
     macro_rules! mk_bench_eval {
         ($name:ident, $degree:literal, $nvars:literal) => {
@@ -1192,7 +1192,7 @@ mod benches {
                     .collect();
                 let values: Vec<_> = (1..=$nvars).map(|x| x as f64).collect();
                 let vars = Variables::from(..$nvars);
-                let poly = Poly::new(coeffs, vars, $degree).unwrap();
+                let poly = ExplicitPoly::new(coeffs.as_slice(), vars, $degree).unwrap();
                 b.iter(|| test::black_box(&poly).eval(&values[..]))
             }
         };
@@ -1223,7 +1223,7 @@ mod benches {
     #[bench]
     fn mul_same_vars_3d_degree4_degree2(b: &mut Bencher) {
         let vars = Variables::from(..3);
-        let l = Poly::new(
+        let l = ExplicitPoly::new(
             (0..super::ncoeffs(3, 4))
                 .into_iter()
                 .map(|i| i as f64)
@@ -1232,7 +1232,7 @@ mod benches {
             4,
         )
         .unwrap();
-        let r = Poly::new(
+        let r = ExplicitPoly::new(
             (0..super::ncoeffs(3, 2))
                 .into_iter()
                 .map(|i| i as f64)
@@ -1241,7 +1241,7 @@ mod benches {
             2,
         )
         .unwrap();
-        let mut target: Poly<Vec<f64>, ((),)> = Poly::zeros(vars, 6);
+        let mut target: ExplicitPoly<sqnc::Wrapper<Vec<f64>, ((),)>> = ExplicitPoly::zeros(vars, 6);
         b.iter(|| (test::black_box(&l) * test::black_box(&r)).assign_to(&mut target));
     }
 
@@ -1249,7 +1249,7 @@ mod benches {
     fn mul_different_vars_1d_degree4_2d_degree2(b: &mut Bencher) {
         let lvars = Variables::from(..1);
         let rvars = Variables::from(1..3);
-        let l = Poly::new(
+        let l = ExplicitPoly::new(
             (0..super::ncoeffs(1, 4))
                 .into_iter()
                 .map(|i| i as f64)
@@ -1258,7 +1258,7 @@ mod benches {
             4,
         )
         .unwrap();
-        let r = Poly::new(
+        let r = ExplicitPoly::new(
             (0..super::ncoeffs(2, 2))
                 .into_iter()
                 .map(|i| i as f64)
@@ -1267,7 +1267,7 @@ mod benches {
             2,
         )
         .unwrap();
-        let mut target: Poly<Vec<f64>, ((),)> = Poly::zeros(lvars | rvars, 6);
+        let mut target: ExplicitPoly<sqnc::Wrapper<Vec<f64>, ((),)>> = ExplicitPoly::zeros(lvars | rvars, 6);
         b.iter(|| (test::black_box(&l) * test::black_box(&r)).assign_to(&mut target));
     }
 

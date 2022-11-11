@@ -7,13 +7,13 @@ use std::iter;
 use std::ops;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Poly<Coeffs> {
+pub struct ExplicitPoly<Coeffs> {
     pub(crate) coeffs: Coeffs,
     vars: Variables,
     degree: Power,
 }
 
-impl<Coeff, Coeffs, CoeffsN> Poly<sqnc::Wrapper<Coeffs, CoeffsN>>
+impl<Coeff, Coeffs, CoeffsN> ExplicitPoly<sqnc::Wrapper<Coeffs, CoeffsN>>
 where
     Coeffs: DerefSequence<CoeffsN>,
     Coeffs::Sequence: SequenceRef<OwnedItem = Coeff>,
@@ -62,7 +62,7 @@ where
     pub fn from_iter<Source>(source: Source) -> Self
     where
         Coeffs: FromIterator<Coeff>,
-        Source: PolyMeta<Coeff = Coeff> + PolyIntoCoeffsIter,
+        Source: Poly<Coeff = Coeff> + PolyIntoCoeffsIter,
     {
         let vars = source.vars();
         let degree = source.degree();
@@ -75,7 +75,7 @@ where
         Coeffs: FromIterator<Coeff> + DerefMutSequence<CoeffsN>,
         Coeffs::Sequence: SequenceRef<OwnedItem = Coeff> + SequenceRefMut + IndexableMutSequence + IterableMutSequence,
         sqnc::Wrapper<Coeffs, CoeffsN>: SequenceRef<OwnedItem = Coeff>,
-        Source: PolyMeta<Coeff = Coeff> + PolyAssign,
+        Source: Poly<Coeff = Coeff> + PolyAssign,
     {
         let mut result = Self::zeros(source.vars(), source.degree());
         let _ = source.add_to(&mut result);
@@ -83,7 +83,7 @@ where
     }
 }
 
-impl<Coeffs> PolyMeta for Poly<Coeffs>
+impl<Coeffs> Poly for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRef,
 {
@@ -100,7 +100,7 @@ where
     }
 }
 
-impl<Coeffs> PolyCoeffs for Poly<Coeffs>
+impl<Coeffs> PolyCoeffs for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRef + IndexableSequence,
 {
@@ -110,7 +110,7 @@ where
     }
 }
 
-impl<Coeffs> PolyCoeffsMut for Poly<Coeffs>
+impl<Coeffs> PolyCoeffsMut for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRefMut + IndexableMutSequence,
 {
@@ -120,7 +120,7 @@ where
     }
 }
 
-impl<Coeffs> PolyCoeffsIter for Poly<Coeffs>
+impl<Coeffs> PolyCoeffsIter for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRef + IterableSequence,
 {
@@ -132,7 +132,7 @@ where
     }
 }
 
-impl<Coeffs> PolyCoeffsIterMut for Poly<Coeffs>
+impl<Coeffs> PolyCoeffsIterMut for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRefMut + IterableMutSequence,
 {
@@ -144,7 +144,7 @@ where
     }
 }
 
-impl<Coeff, Coeffs> PolyIntoCoeffsIter for Poly<Coeffs>
+impl<Coeff, Coeffs> PolyIntoCoeffsIter for ExplicitPoly<Coeffs>
 where
     Coeffs: SequenceRef<OwnedItem = Coeff> + IntoIterator<Item = Coeff>,
 {
@@ -156,7 +156,7 @@ where
     }
 }
 
-impl<Coeff, Coeffs, PDCoeff> PolyPartialDeriv for Poly<Coeffs>
+impl<Coeff, Coeffs, PDCoeff> PolyPartialDeriv for ExplicitPoly<Coeffs>
 where
     Coeff: IntegerMultiple<Output = PDCoeff>,
     for<'coeff> &'coeff Coeff: IntegerMultiple<Output = PDCoeff>,
@@ -171,7 +171,7 @@ where
     }
 }
 
-impl<'l, 'r, LCoeffs, RPoly> ops::Mul<&'r RPoly> for &'l Poly<LCoeffs> {
+impl<'l, 'r, LCoeffs, RPoly> ops::Mul<&'r RPoly> for &'l ExplicitPoly<LCoeffs> {
     type Output = Mul<Self, &'r RPoly>;
 
     fn mul(self, rhs: &'r RPoly) -> Self::Output {

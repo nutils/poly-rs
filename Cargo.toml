@@ -1,6 +1,6 @@
 [package]
 name = "nutils-poly"
-version = "1.0.0-dev"
+version = "0.1.0"
 authors = ["Evalf <info@evalf.com>"]
 edition = "2021"
 license = "MIT"
@@ -14,7 +14,7 @@ bench = []
 
 [dependencies]
 num-traits = "0.2"
-sqnc = { git = "https://github.com/evalf/sqnc.git", branch = "introduce-sqnc" }
+sqnc = "1"
 
 [dev-dependencies]
 approx = "0.5"

@@ -7,7 +7,7 @@ use sqnc::{SequenceRef, IndexableSequence};
 use std::iter;
 use std::ops;
 
-pub trait PolyMeta {
+pub trait Poly {
     type Coeff: ?Sized;
 
     fn vars(&self) -> Variables;
@@ -24,15 +24,15 @@ pub trait PolyMeta {
     }
 }
 
-pub trait PolyCoeffs: PolyMeta {
+pub trait PolyCoeffs: Poly {
     fn coeff(&self, index: usize) -> Option<&Self::Coeff>;
 }
 
-pub trait PolyCoeffsMut: PolyMeta {
+pub trait PolyCoeffsMut: Poly {
     fn coeff_mut(&mut self, index: usize) -> Option<&mut Self::Coeff>;
 }
 
-pub trait PolyCoeffsIter: PolyMeta {
+pub trait PolyCoeffsIter: Poly {
     type CoeffsIter<'a>: Iterator<Item = &'a Self::Coeff>
     where
         Self: 'a;
@@ -48,7 +48,7 @@ pub trait PolyCoeffsIter: PolyMeta {
     }
 }
 
-pub trait PolyCoeffsIterMut: PolyMeta {
+pub trait PolyCoeffsIterMut: Poly {
     type CoeffsIterMut<'a>: Iterator<Item = &'a mut Self::Coeff>
     where
         Self: 'a;
@@ -64,7 +64,7 @@ pub trait PolyCoeffsIterMut: PolyMeta {
     }
 }
 
-pub trait PolyIntoCoeffsIter: PolyMeta
+pub trait PolyIntoCoeffsIter: Poly
 where
     Self: Sized,
     Self::Coeff: Sized,
@@ -82,7 +82,7 @@ where
     }
 }
 
-pub trait PolyAssign: PolyMeta
+pub trait PolyAssign: Poly
 where
     Self: Sized,
 {
@@ -90,7 +90,7 @@ where
     fn assign_to<Target>(self, target: &mut Target) -> Result<(), Error>
     where
         Self::Coeff: Zero,
-        Target: PolyMeta<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut;
+        Target: Poly<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut;
 
     /// Add the coefficients to the target.
     fn add_to<Target>(self, target: &mut Target) -> Result<(), Error>
@@ -100,12 +100,12 @@ where
         Self::Coeff: Sized;
 }
 
-pub trait PolyAssignRef: PolyMeta {
+pub trait PolyAssignRef: Poly {
     /// Assign cloned coefficients to the target.
     fn assign_clone_to<Target>(&self, target: &mut Target) -> Result<(), Error>
     where
         Self::Coeff: Zero + Clone,
-        Target: PolyMeta<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut;
+        Target: Poly<Coeff = Self::Coeff> + PolyCoeffsMut + PolyCoeffsIterMut;
 
     /// Add coefficients to the target by reference.
     fn add_ref_to<'a, Target>(&'a self, target: &mut Target) -> Result<(), Error>
@@ -114,7 +114,7 @@ pub trait PolyAssignRef: PolyMeta {
         Target::Coeff: ops::AddAssign<&'a Self::Coeff>;
 }
 
-pub trait PolyEval<Value>: PolyMeta {
+pub trait PolyEval<Value>: Poly {
     type Output;
 
     fn eval<Values>(&self, values: &Values) -> Self::Output
@@ -122,8 +122,8 @@ pub trait PolyEval<Value>: PolyMeta {
         Values: SequenceRef<OwnedItem = Value> + IndexableSequence + ?Sized;
 }
 
-pub trait PolyPartialDeriv: PolyMeta {
-    type PartialDeriv<'a>: PolyMeta + PolyAssign
+pub trait PolyPartialDeriv: Poly {
+    type PartialDeriv<'a>: Poly + PolyAssign
     where
         Self: 'a;
 
