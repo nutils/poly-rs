@@ -1,0 +1,11 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - release/*
+jobs:
+  test:
+    name: Test
+    uses: evalf/workflow-cargo-test/.github/workflows/test.yaml@release/1

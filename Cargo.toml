@@ -1,0 +1,21 @@
+[package]
+name = "nutils-poly"
+version = "1.0.0"
+authors = ["Evalf <info@evalf.com>"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/nutils/poly-rs"
+description = "Low-level functions for evaluating and manipulating polynomials"
+keywords = ["polynomials"]
+categories = ["mathematics"]
+
+[features]
+bench = []
+
+[dependencies]
+ndarray = "0.15"
+num-traits = "0.2"
+sqnc = { version = "1", features = ["ndarray"] }
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--html-in-header", "docs-header.html"]
