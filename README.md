@@ -40,5 +40,5 @@ See the [crate documentation] for a detailed description.
 
 This crate is part of the [Nutils project].
 
-[crate documentation]: https://docs.rs/sqnc
+[crate documentation]: https://docs.rs/nutils-poly
 [Nutils project]: https://nutils.org
